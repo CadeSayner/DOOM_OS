@@ -19,6 +19,10 @@ pub fn timer_handler(regs: *InterruptRegisters) void {
     timer_ticks += 1;
 }
 
+pub fn get_millis() u64 {
+    return @as(*volatile u64, &timer_ticks).*;
+}
+
 pub fn get_ticks() u64 {
-    return timer_ticks / 50;
+    return get_millis() / 50;
 }

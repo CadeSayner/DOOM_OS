@@ -15,6 +15,7 @@ const TarFs = @import("fs/tarfs/tarfs.zig");
 const Process = @import("process.zig");
 const KernelContext = @import("context.zig");
 const Timer = @import("drivers/timer.zig");
+const BuildOptions = @import("build_options");
 
 pub const std_options: std.Options = .{
     .log_level = .debug,
@@ -62,30 +63,25 @@ export fn kmain(magic: u32, multiboot_info: *Grub.MultibootInfo) callconv(.c) vo
 
     std.log.info("Initial frame: {d}", .{initial_frame});
 
-    frame_allocator_storage = FrameAllocator.init(initial_frame);
-    slab_allocator_storage = SlabAllocator.init(&frame_allocator_storage);
+    KernelContext.ctx.frame_allocator = FrameAllocator.init(initial_frame);
+    KernelContext.ctx.slab_allocator = SlabAllocator.init(&KernelContext.ctx.frame_allocator);
+    KernelContext.ctx.allocator = KernelContext.ctx.slab_allocator.allocator();
 
-    const global_kernel_allocator = slab_allocator_storage.allocator();
-
-    run(frame_allocator_storage, global_kernel_allocator, initrd_module) catch |err| @panic(@errorName(err));
+    run(initrd_module) catch |err| @panic(@errorName(err));
 
     while (true) {}
 }
 
-// Kernel state must be static: kmain's stack frame is reused by syscalls once user mode starts.
-var frame_allocator_storage: FrameAllocator = undefined;
-var slab_allocator_storage: SlabAllocator = undefined;
-var vfs_storage: Vfs = undefined;
-
-fn run(frame_allocator: FrameAllocator, allocator: std.mem.Allocator, initrd: *Grub.Module) !void {
-    vfs_storage = try Vfs.init(allocator);
-    const vfs = &vfs_storage;
+fn run(initrd: *Grub.Module) !void {
+    const allocator = KernelContext.ctx.allocator;
+    KernelContext.ctx.vfs = try Vfs.init(allocator);
+    const vfs = &KernelContext.ctx.vfs;
     std.log.info("VFS initialized", .{});
 
     const tty0 = try allocator.create(Tty);
     const tty1 = try allocator.create(Tty);
     tty0.* = .{};
-    tty1.* = .{};
+    tty1.* = .{ .serial_output = true };
 
     _ = try vfs.addEntry("tty0", Inode.Kind.character_device, &.{}, Device{ .tty = tty0 });
     _ = try vfs.addEntry("tty1", Inode.Kind.character_device, &.{}, Device{ .tty = tty1 });
@@ -96,9 +92,10 @@ fn run(frame_allocator: FrameAllocator, allocator: std.mem.Allocator, initrd: *G
 
     vfs.ls();
 
-    KernelContext.ctx = .{ .frame_allocator = frame_allocator, .allocator = allocator, .vfs = vfs };
-
-    std.log.info("Trying to start doom!!", .{});
-    const doom_process = try Process.elf32_parse_file("doom.elf");
-    doom_process.start();
+    std.log.info("Starting {s}", .{BuildOptions.program});
+    const process = Process.elf32_parse_file(BuildOptions.program) catch |err| {
+        std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
+        return err;
+    };
+    process.start();
 }

@@ -85,7 +85,7 @@ pub fn kbdHandler(regs: *InterruptRegisters) void {
         else => {
             const ascii = scanCodeToAscii(scan_code, shift_pressed);
             if (ascii) |c| {
-                std.log.info("{c}", .{c});
+                _ = c;
                 emit(.{ .ascii = ascii, .scan_code = scan_code, .pressed = true, .shift = shift_pressed });
             }
         },

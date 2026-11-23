@@ -52,7 +52,6 @@ pub fn mountTarFs(initrd: *Grub.Module, vfs: *Vfs) !void {
         const size = try parseOctal(tar_header.size);
         const is_directory = tar_header.typeflag == @intFromEnum(TarTypeFlag.directory);
         const payload_ptr: [*]const u8 = @ptrFromInt(@intFromPtr(tar_header) + @sizeOf(TarHeader));
-        std.log.info("The payload pointer is {x}", .{@intFromPtr(payload_ptr)});
         const data: []const u8 = if (is_directory) &.{} else payload_ptr[0..size];
         _ = try vfs.addEntry(&tar_header.name, if (is_directory) InodeKind.directory else InodeKind.file, data, null);
 

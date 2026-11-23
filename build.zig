@@ -1,8 +1,8 @@
 const std = @import("std");
 
-
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
+    const program = b.option([]const u8, "program", "Initrd executable to start (default: doom.elf)") orelse "doom.elf";
 
     // 32-bit freestanding x86, no libc/OS — the Zig equivalent of `-m32`
     // plus a bare-metal target.
@@ -154,23 +154,117 @@ pub fn build(b: *std.Build) void {
             .stack_protector = false,
         }),
     });
+    const options = b.addOptions();
+    options.addOption([]const u8, "program", program);
+    zig_obj.root_module.addOptions("build_options", options);
 
     exe.root_module.addObject(zig_obj);
 
     b.installArtifact(exe);
 
-    // ── run / debug / clean steps, mirroring the Makefile ───────────────
+    const user_target = b.resolveTargetQuery(.{
+        .cpu_arch = .x86,
+        .os_tag = .freestanding,
+        .abi = .none,
+        .cpu_features_sub = disabled,
+    });
+    const user_optimize: std.builtin.OptimizeMode = .ReleaseFast;
+    const libc = b.addLibrary(.{
+        .name = "doomc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("userspace/libc/libc.zig"),
+            .target = user_target,
+            .optimize = user_optimize,
+            .single_threaded = true,
+            .stack_protector = false,
+        }),
+    });
+    b.installArtifact(libc);
+    const crt0 = assembleWithNasm(b, "userspace/libc/crt0.s");
+    const user_c_flags = &[_][]const u8{
+        "-m32",         "-O2",      "-ffreestanding", "-nostdinc", "-fno-stack-protector",
+        "-fno-builtin", "-fno-pic", "-fno-pie",       "-mno-sse",  "-mno-sse2",
+        "-mno-mmx",
+    };
+    const doom_sources = &[_][]const u8{
+        "dummy.c",    "am_map.c",     "doomdef.c",     "doomstat.c",         "dstrings.c", "d_event.c",  "d_items.c",
+        "d_iwad.c",   "d_loop.c",     "d_main.c",      "d_mode.c",           "d_net.c",    "f_finale.c", "f_wipe.c",
+        "g_game.c",   "hu_lib.c",     "hu_stuff.c",    "info.c",             "i_cdmus.c",  "i_endoom.c", "i_joystick.c",
+        "i_scale.c",  "i_sound.c",    "i_system.c",    "i_timer.c",          "memio.c",    "m_argv.c",   "m_bbox.c",
+        "m_cheat.c",  "m_config.c",   "m_controls.c",  "m_fixed.c",          "m_menu.c",   "m_misc.c",   "m_random.c",
+        "p_ceilng.c", "p_doors.c",    "p_enemy.c",     "p_floor.c",          "p_inter.c",  "p_lights.c", "p_map.c",
+        "p_maputl.c", "p_mobj.c",     "p_plats.c",     "p_pspr.c",           "p_saveg.c",  "p_setup.c",  "p_sight.c",
+        "p_spec.c",   "p_switch.c",   "p_telept.c",    "p_tick.c",           "p_user.c",   "r_bsp.c",    "r_data.c",
+        "r_draw.c",   "r_main.c",     "r_plane.c",     "r_segs.c",           "r_sky.c",    "r_things.c", "sha1.c",
+        "sounds.c",   "statdump.c",   "st_lib.c",      "st_stuff.c",         "s_sound.c",  "tables.c",   "v_video.c",
+        "wi_stuff.c", "w_checksum.c", "w_file.c",      "w_main.c",           "w_wad.c",    "z_zone.c",   "w_file_stdc.c",
+        "i_input.c",  "i_video.c",    "doomgeneric.c", "doomgeneric_c-os.c",
+    };
+    const doom = addUserProgram(b, "doom", user_target, user_optimize, crt0, libc, null);
+    doom.root_module.addCMacro("DOOMGENERIC_RGBA", "1");
+    doom.root_module.addCSourceFiles(.{ .root = b.path("userspace/doom"), .files = doom_sources, .flags = user_c_flags });
+    const libc_tests = addUserProgram(b, "libc-tests", user_target, user_optimize, crt0, libc, null);
+    libc_tests.root_module.addCSourceFile(.{ .file = b.path("userspace/libc/tests.c"), .flags = user_c_flags });
+
+    var programs: std.ArrayList(UserProgram) = .empty;
+    programs.append(b.allocator, .{ .exe = doom, .filename = "doom.elf" }) catch @panic("OOM");
+    programs.append(b.allocator, .{ .exe = libc_tests, .filename = "libc-tests.elf" }) catch @panic("OOM");
+    const sources = b.run(&.{ "find", "userspace", "-mindepth", "2", "-maxdepth", "2", "-type", "f", "(", "-name", "main.zig", "-o", "-name", "main.c", ")" });
+    var lines = std.mem.splitScalar(u8, sources, '\n');
+    while (lines.next()) |source| {
+        if (source.len == 0) continue;
+        const directory = std.fs.path.dirname(source) orelse @panic("Invalid user program path");
+        const name = std.fs.path.basename(directory);
+        for (name) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_')
+                std.debug.panic("Invalid user program directory name: {s}", .{name});
+        }
+        const filename = b.fmt("{s}.elf", .{name});
+        for (programs.items) |existing| {
+            if (std.mem.eql(u8, existing.filename, filename))
+                std.debug.panic("Duplicate user program: {s}", .{filename});
+        }
+        const is_zig = std.mem.endsWith(u8, source, ".zig");
+        const user_exe = addUserProgram(b, name, user_target, user_optimize, crt0, libc, if (is_zig) source else null);
+        if (!is_zig) user_exe.root_module.addCSourceFile(.{ .file = b.path(source), .flags = user_c_flags });
+        programs.append(b.allocator, .{ .exe = user_exe, .filename = filename }) catch @panic("OOM");
+    }
+    std.mem.sort(UserProgram, programs.items, {}, struct {
+        fn lessThan(_: void, a: UserProgram, c: UserProgram) bool {
+            return std.mem.lessThan(u8, a.filename, c.filename);
+        }
+    }.lessThan);
+
+    const wad = b.addSystemCommand(&.{ "tar", "-xOf" });
+    wad.addFileArg(b.path("DOOMOS/boot/init_rd.tar"));
+    wad.addArg("doom1.wad");
+    const initrd_files = b.addWriteFiles();
+    _ = initrd_files.addCopyFile(wad.captureStdOut(.{}), "doom1.wad");
+    const make_initrd = b.addSystemCommand(&.{ "tar", "-cf" });
+    const initrd = make_initrd.addOutputFileArg("init_rd.tar");
+    make_initrd.addArg("-C");
+    make_initrd.addDirectoryArg(initrd_files.getDirectory());
+    for (programs.items) |entry| {
+        _ = initrd_files.addCopyFile(entry.exe.getEmittedBin(), entry.filename);
+        make_initrd.addArg(entry.filename);
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(entry.exe.getEmittedBin(), .bin, entry.filename).step);
+    }
+    make_initrd.addArg("doom1.wad");
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(initrd, .bin, "init_rd.tar").step);
+
+    // ── run / debug / clean ────────────────────────────────────────────
     const build_root = b.build_root.path orelse ".";
-
-    const move_kernel = b.addSystemCommand(&[_][]const u8{"cp"});
-    move_kernel.addArtifactArg(exe);
-    move_kernel.addArg(b.pathJoin(&[_][]const u8{ build_root, "DOOMOS/boot/kernel" }));
-
+    const iso_files = b.addWriteFiles();
+    _ = iso_files.addCopyFile(exe.getEmittedBin(), "boot/kernel");
+    _ = iso_files.addCopyFile(initrd, "boot/init_rd.tar");
+    _ = iso_files.addCopyFile(b.path("DOOMOS/boot/grub/grub.cfg"), "boot/grub/grub.cfg");
     const make_iso = b.addSystemCommand(&[_][]const u8{"grub-mkrescue"});
     make_iso.addArg("-o");
     make_iso.addArg(b.pathJoin(&[_][]const u8{ build_root, "DOOMOS.iso" }));
-    make_iso.addArg(b.pathJoin(&[_][]const u8{ build_root, "DOOMOS" }));
-    make_iso.step.dependOn(&move_kernel.step);
+    make_iso.addDirectoryArg(iso_files.getDirectory());
+    const iso_step = b.step("iso", "Build the bootable ISO without starting QEMU");
+    iso_step.dependOn(&make_iso.step);
+    make_iso.step.dependOn(b.getInstallStep());
 
     const run_qemu = b.addSystemCommand(&[_][]const u8{"qemu-system-i386"});
     run_qemu.addArg("-cdrom");
@@ -201,4 +295,41 @@ pub fn build(b: *std.Build) void {
     });
     const clean_step = b.step("clean", "Remove build artifacts");
     clean_step.dependOn(&clean_cmd.step);
+}
+
+const UserProgram = struct {
+    exe: *std.Build.Step.Compile,
+    filename: []const u8,
+};
+
+fn addUserProgram(
+    b: *std.Build,
+    name: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    crt0: std.Build.LazyPath,
+    libc: *std.Build.Step.Compile,
+    zig_source: ?[]const u8,
+) *std.Build.Step.Compile {
+    const module = b.createModule(.{
+        .root_source_file = if (zig_source) |path| b.path(path) else null,
+        .target = target,
+        .optimize = optimize,
+        .single_threaded = true,
+        .stack_protector = false,
+    });
+    module.addIncludePath(b.path("userspace/libc/include"));
+    module.addObjectFile(crt0);
+    module.linkLibrary(libc);
+    if (zig_source != null) {
+        module.addImport("doom_os", b.createModule(.{
+            .root_source_file = b.path("userspace/zig/os.zig"),
+            .target = target,
+            .optimize = optimize,
+            .single_threaded = true,
+        }));
+    }
+    const result = b.addExecutable(.{ .name = name, .root_module = module });
+    result.entry = .{ .symbol_name = "_start" };
+    return result;
 }

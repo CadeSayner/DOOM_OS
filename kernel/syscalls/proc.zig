@@ -26,7 +26,7 @@ pub fn execve(regs: *InterruptRegisters) i32 {
     return 0;
 }
 
-/// get_proc_uptime() -> milliseconds since the process started.
+/// get_proc_uptime() -> elapsed 50 ms ticks, as expected by the bundled Doom port.
 pub fn getProcUptime(regs: *InterruptRegisters) i32 {
     _ = regs;
     const proc = Process.current() orelse return -Abi.ESRCH;
@@ -35,9 +35,9 @@ pub fn getProcUptime(regs: *InterruptRegisters) i32 {
 
 /// sleep(ms: ebx): waits with interrupts enabled so the timer keeps ticking.
 pub fn sleep(regs: *InterruptRegisters) i32 {
-    const start = Timer.get_ticks();
+    const start = Timer.get_millis();
     const ms: u64 = regs.ebx;
-    while (Timer.get_ticks() - start < ms) {
+    while (Timer.get_millis() -% start < ms) {
         asm volatile ("sti; nop; hlt; cli" ::: .{ .memory = true });
     }
     return 0;
