@@ -2,6 +2,9 @@ const std = @import("std");
 const File = @import("vfs.zig").File;
 const Inode = @import("vfs.zig").Inode;
 const Serial = @import("../../drivers/serial.zig");
+const Ps2 = @import("../../drivers/ps2.zig");
+const Context = @import("../../context.zig");
+
 // need to implement open
 
 pub const Tty = struct {
@@ -10,6 +13,14 @@ pub const Tty = struct {
     tail: usize = 0,
     count: usize = 0,
     serial_output: bool = false,
+
+    pub fn ttyKeyListener(event: Ps2.KeyEvent) void {
+        const process = Context.ctx.scheduler.?.executing_process orelse return;
+        const ascii = event.ascii orelse return;
+        if (!event.pressed) return;
+        const stdin = process.getFile(0) orelse return;
+        _ = stdin.write(&.{ascii}) catch {};
+    }
 
     pub fn getDescriptor(self: *Tty, allocator: std.mem.Allocator) !*File {
         const file = try allocator.create(File);

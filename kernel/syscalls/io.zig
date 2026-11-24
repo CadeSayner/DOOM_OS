@@ -10,7 +10,7 @@ const max_transfer = std.math.maxInt(i32);
 
 /// read(fd: ebx, buf: ecx, count: edx) -> bytes read | -errno
 pub fn read(regs: *InterruptRegisters) i32 {
-    const proc = Process.current() orelse return -Abi.ESRCH;
+    const proc = Context.ctx.scheduler.?.executing_process orelse return -Abi.ESRCH;
     const file = proc.getFile(regs.ebx) orelse return -Abi.EBADF;
     const count = @min(regs.edx, max_transfer);
     if (count == 0) return 0;
@@ -21,7 +21,7 @@ pub fn read(regs: *InterruptRegisters) i32 {
 
 /// write(fd: ebx, buf: ecx, count: edx) -> bytes written | -errno
 pub fn write(regs: *InterruptRegisters) i32 {
-    const proc = Process.current() orelse return -Abi.ESRCH;
+    const proc = Context.ctx.scheduler.?.executing_process orelse return -Abi.ESRCH;
     const file = proc.getFile(regs.ebx) orelse return -Abi.EBADF;
     const count = @min(regs.edx, max_transfer);
     if (count == 0) return 0;
@@ -32,14 +32,15 @@ pub fn write(regs: *InterruptRegisters) i32 {
 
 /// open(path: ebx) -> fd | -errno. Flags/mode are ignored, like in C-OS.
 pub fn open(regs: *InterruptRegisters) i32 {
-    const proc = Process.current() orelse return -Abi.ESRCH;
+    const proc = Context.ctx.scheduler.?.executing_process orelse return -Abi.ESRCH;
     var path = proc.userString(regs.ebx, max_path_len) orelse return -Abi.EFAULT;
     while (std.mem.startsWith(u8, path, "./")) path = path[2..];
     while (std.mem.startsWith(u8, path, "/")) path = path[1..];
+    const allocator = Context.ctx.allocator orelse @panic("Allocator not set to kernel context before open call");
 
-    const file = Context.ctx.vfs.open(path, Context.ctx.allocator) catch |err| return Abi.errnoOf(err);
+    const file = Context.ctx.vfs.?.open(path, allocator) catch |err| return Abi.errnoOf(err);
     const fd = proc.addFile(file) orelse {
-        file.close(Context.ctx.allocator) catch {};
+        file.close(allocator) catch {};
         return -Abi.EMFILE;
     };
     return @intCast(fd);
@@ -47,14 +48,14 @@ pub fn open(regs: *InterruptRegisters) i32 {
 
 /// close(fd: ebx) -> 0 | -errno
 pub fn close(regs: *InterruptRegisters) i32 {
-    const proc = Process.current() orelse return -Abi.ESRCH;
+    const proc = Context.ctx.scheduler.?.executing_process orelse return -Abi.ESRCH;
     proc.closeFile(regs.ebx) catch |err| return Abi.errnoOf(err);
     return 0;
 }
 
 /// lseek(fd: ebx, offset: ecx, whence: edx) -> new position | -errno
 pub fn lseek(regs: *InterruptRegisters) i32 {
-    const proc = Process.current() orelse return -Abi.ESRCH;
+    const proc = Context.ctx.scheduler.?.executing_process orelse return -Abi.ESRCH;
     const file = proc.getFile(regs.ebx) orelse return -Abi.EBADF;
     const whence: File.Whence = switch (regs.edx) {
         0 => .set,

@@ -27,7 +27,7 @@ const GdtPtr = packed struct(u48) {
     base: u32,
 };
 
-const Tss = extern struct{
+const Tss = extern struct {
     prev_tss: u32,
     esp0: u32,
     ss0: u32,
@@ -118,6 +118,6 @@ fn writeTss(comptime index: usize, ss0: u16, esp0: u32) void {
     tss.gs = sel.kernel_data | 3;
 }
 
-fn set_kernel_stack(esp0: u32) void {
+pub fn setKernelStack(esp0: u32) void {
     tss.esp0 = esp0;
 }

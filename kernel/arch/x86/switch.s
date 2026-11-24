@@ -15,3 +15,20 @@ switch_context:
     pop ebx
     pop ebp
     ret 
+
+global irq_save
+global irq_restore
+
+; uint32_t irq_save(void): returns the old EFLAGS, then disables interrupts
+irq_save:
+    pushfd
+    pop eax          ; eax = old EFLAGS (return value)
+    cli
+    ret
+
+; void irq_restore(uint32_t flags): puts EFLAGS back, which re-enables interrupts only if they were on before
+irq_restore:
+    mov eax, [esp+4]
+    push eax
+    popfd
+    ret

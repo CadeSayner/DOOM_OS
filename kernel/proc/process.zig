@@ -5,7 +5,6 @@ const FrameAllocator = @import("../mm/frame_allocator.zig").FrameAllocator;
 const Timer = @import("../drivers/timer.zig");
 
 const Vga = @import("../drivers/vga.zig");
-const Ps2 = @import("../drivers/ps2.zig");
 const Vfs = @import("../fs/vfs/vfs.zig").Vfs;
 const Elf = @import("../lib/elf.zig");
 const Context = @import("../context.zig");
@@ -39,7 +38,7 @@ extern fn switch_context(old_esp: *u32, new_esp: u32) callconv(.c) void;
 
 const PageTable = [1024]u32;
 
-const PageDirectory = struct {
+pub const PageDirectory = struct {
     page_directory_table: [1024]u32,
     pub fn init(self: *PageDirectory) *PageDirectory {
         self.page_directory_table = [_]u32{0} ** 1024;
@@ -62,7 +61,7 @@ const PageDirectory = struct {
         const pte_index: usize = @intCast(page_number & 0x3FF);
 
         if (self.page_directory_table[pde_index] == 0) {
-            const pt_slice = try Context.ctx.allocator.alignedAlloc(u32, .fromByteUnits(4096), 1024);
+            const pt_slice = try Context.ctx.allocator.?.alignedAlloc(u32, .fromByteUnits(4096), 1024);
             @memset(pt_slice, 0);
 
             const pt_virt: usize = @intFromPtr(pt_slice.ptr);
@@ -108,7 +107,6 @@ pub const Process = struct {
     entry_point: u32, // wont need this remove it later when the starting point will be defined when it gets schedules or do i still need it?
     status: Status,
     page_directory: *PageDirectory, // owns the page directory
-    next: ?*Process,
     saved_esp: u32,
     kernel_stack_base: u32,
     kernel_stack_top: u32,
@@ -124,11 +122,16 @@ pub const Process = struct {
         image_end: u32,
         page_directory: *PageDirectory,
     ) !*Process {
-        const process = try Context.ctx.allocator.create(Process);
+        const process = try Context.ctx.allocator.?.create(Process);
 
         var open_fds = [_]?*File{null} ** max_open_files;
-        open_fds[0] = try Context.ctx.vfs.open("tty0", Context.ctx.allocator);
-        open_fds[1] = try Context.ctx.vfs.open("tty1", Context.ctx.allocator);
+
+        // TODO: Instead of unwrapping this stuff everywhere we should have a safe kernel context type that
+        // gets generated and unwraps everything when we assert that everything should exist and then everything
+        // just uses the safe context knowing that it has it this is SHITTTTT
+        const allocator = Context.ctx.allocator orelse @panic("No allocator in context");
+        open_fds[0] = try Context.ctx.vfs.?.open("tty0", allocator);
+        open_fds[1] = try Context.ctx.vfs.?.open("tty1", allocator);
 
         const heap_start: u32 = @max(
             std.mem.alignForward(u32, @intCast(process_start_virtual_address + process_file_size + 0x1000), 0x1000),
@@ -136,8 +139,8 @@ pub const Process = struct {
         );
 
         // this should be inside of a member method
-        const base = Context.ctx.frame_allocator.allocateConsecutiveFrames(frames_per_kernel_stack);
-        const kernel_stack_current = prepare_kernel_stack(base, &taskEntry);
+        const base = Context.ctx.frame_allocator.?.allocateConsecutiveFrames(frames_per_kernel_stack);
+        const kernel_stack_current = prepareKernelStack(base + kernel_stack_size, &taskEntry);
 
         process.* = .{
             .pid = next_pid,
@@ -147,14 +150,12 @@ pub const Process = struct {
             .kernel_stack_top = base + kernel_stack_size,
             .saved_esp = kernel_stack_current,
             .page_directory = page_directory,
-            .next = null,
             .sbrk = heap_start,
             .brk = heap_start,
             .start_time_ms = start_time_ms,
             .file_descriptors = open_fds,
         };
 
-        add(process);
         return process;
     }
 
@@ -176,7 +177,7 @@ pub const Process = struct {
     pub fn closeFile(self: *Process, fd: u32) !void {
         const file = self.getFile(fd) orelse return error.BadFileDescriptor;
         self.file_descriptors[fd] = null;
-        try file.close(Context.ctx.allocator);
+        try file.close(Context.ctx.allocator orelse @panic("No allocator provided to closeFile"));
     }
 
     pub fn setBrk(self: *Process, new_brk: u32) bool {
@@ -217,45 +218,33 @@ pub const Process = struct {
         return null;
     }
 
-    pub fn release(self: *Process) void {
-        remove(self.pid);
-        if (executing_process == self) executing_process = null;
-    }
-
-    pub fn exit(self: *Process, code: u32) noreturn {
-        std.log.info("Process {d} exited with code {d}", .{ self.pid, @as(i32, @bitCast(code)) });
-        self.status = Status.Terminated;
-        self.release();
-        halt();
-    }
-
-    // this function needs to go instead we need the scheduler to do this instead for us to basically schedule a runnable process
-    // and then  switch to it
-    pub fn start(self: *Process) void {
-        executing_process = self;
-        Ps2.subscribe(&ttyKeyListener) catch |err| std.log.err("Could not subscribe tty listener: {s}", .{@errorName(err)});
-        std.log.info("Loading page table address: {x}", .{Constants.virtToPhys(@intFromPtr(self.page_directory))});
-        load_page_table(Constants.virtToPhys(@intFromPtr(self.page_directory)));
-        self.status = Status.Running;
-        std.log.info("Going to start process with entry point {x}", .{self.entry_point});
-        switch_to_user_mode_process(self.entry_point);
+    pub fn prepareKernelStack(stack_top: u32, entry: *const fn () callconv(.c) noreturn) u32 {
+        var sp: [*]u32 = @ptrFromInt(stack_top);
+        sp -= 1;
+        sp[0] = 0; // fake return address for entry
+        sp -= 1;
+        sp[0] = @intFromPtr(entry); // popped by 'ret' in switch_context
+        sp -= 1;
+        sp[0] = 0; // ebp
+        sp -= 1;
+        sp[0] = 0; // ebx
+        sp -= 1;
+        sp[0] = 0; // esi
+        sp -= 1;
+        sp[0] = 0; // edi (first pop)
+        return @intFromPtr(sp);
     }
 };
 
 var process_list: ?*Process = null;
 var executing_process: ?*Process = null;
 
-// this also needs to be cleaned up since this is the schedulers job
-pub fn current() ?*Process {
-    return executing_process;
-}
-
 pub export fn taskEntry() callconv(.c) noreturn {
     // no closures which sucks so we need to assume the process we want to start has been scheduled already
     // well every process has this same function hard coded in their kernel stack when they first start
 
     // TODO Change to properly use the scheduler not this weird current shit
-    switch_to_user_mode_process(current().?.entry_point);
+    switch_to_user_mode_process(Context.ctx.scheduler.?.executing_process.?.entry_point);
     unreachable;
 }
 
@@ -264,67 +253,15 @@ fn halt() noreturn {
     while (true) asm volatile ("sti; hlt" ::: .{ .memory = true });
 }
 
-fn prepare_kernel_stack(stack_top: u32, entry: *const fn () callconv(.c) noreturn) u32 {
-    var sp: [*]u32 = @ptrFromInt(stack_top);
-    sp -= 1;
-    sp[0] = 0; // fake return address for entry
-    sp -= 1;
-    sp[0] = @intFromPtr(entry); // popped by 'ret' in switch_context
-    sp -= 1;
-    sp[0] = 0; // ebp
-    sp -= 1;
-    sp[0] = 0; // ebx
-    sp -= 1;
-    sp[0] = 0; // esi
-    sp -= 1;
-    sp[0] = 0; // edi (first pop)
-    return @intFromPtr(sp);
-}
-
-// come back to this since this shouldnt be a thing after we have a /keyboard file that is working
-fn ttyKeyListener(event: Ps2.KeyEvent) void {
-    const process = executing_process orelse return;
-    const ascii = event.ascii orelse return;
-    if (!event.pressed) return;
-    const stdin = process.getFile(0) orelse return;
-    _ = stdin.write(&.{ascii}) catch {};
-}
-
 var next_pid: u32 = 1;
 
-fn add(new_process: *Process) void {
-    if (process_list == null) {
-        process_list = new_process;
-    } else {
-        new_process.*.next = process_list;
-        process_list = new_process;
-    }
-    next_pid += 1;
-}
-
-fn remove(pid: u32) void {
-    var prev: ?*Process = null;
-    var cursor = process_list;
-    while (cursor) |proc| {
-        if (proc.*.pid == pid) {
-            if (prev) |p| {
-                p.*.next = proc.*.next;
-            } else {
-                process_list = proc.*.next;
-            }
-            return;
-        }
-        prev = cursor;
-        cursor = proc.*.next;
-    }
-}
-
 pub fn page_fault_handler(faulting_address: u32) i32 {
-    if (faulting_address <= executing_process.?.brk and faulting_address >= executing_process.?.sbrk) {
-        const new_page_frame_vaddr = Context.ctx.frame_allocator.allocateFrame();
+    const proc = Context.ctx.scheduler.?.executing_process orelse return -1;
+    if (faulting_address <= proc.brk and faulting_address >= proc.sbrk) {
+        const new_page_frame_vaddr = Context.ctx.frame_allocator.?.allocateFrame();
         const frame: [*]u8 = @ptrFromInt(new_page_frame_vaddr);
         @memset(frame[0..Constants.frame_size], 0);
-        executing_process.?.page_directory.addMapping(faulting_address >> 12, Constants.virtToPhys(new_page_frame_vaddr) >> 12) catch return -1;
+        proc.page_directory.addMapping(faulting_address >> 12, Constants.virtToPhys(new_page_frame_vaddr) >> 12) catch return -1;
         return 0;
     }
     @panic("A page fault occured outside of the heap, this cannot be handled by the kernel!");
@@ -332,7 +269,7 @@ pub fn page_fault_handler(faulting_address: u32) i32 {
 
 pub fn elf32_parse_file(file_name: []const u8) !*Process {
     std.log.info("Looking up file: {s}", .{file_name});
-    const exec_file_inode = Context.ctx.vfs.lookup(file_name);
+    const exec_file_inode = Context.ctx.vfs.?.lookup(file_name);
     std.log.info("File inode: {x}", .{@intFromPtr(exec_file_inode)});
     if (exec_file_inode == null) {
         return error.FileNotFound;
@@ -350,7 +287,7 @@ pub fn elf32_parse_file(file_name: []const u8) !*Process {
     }
 
     // Create the address space.
-    const page_directory = try Context.ctx.allocator.create(PageDirectory);
+    const page_directory = try Context.ctx.allocator.?.create(PageDirectory);
     _ = page_directory.init();
 
     const phdr: [*]const Elf.Elf32Phdr = @ptrFromInt(
@@ -375,7 +312,7 @@ pub fn elf32_parse_file(file_name: []const u8) !*Process {
             if (page_directory.lookup(@intCast(page))) |existing| {
                 frame = Constants.physToVirt(existing * 4096);
             } else {
-                frame = Context.ctx.frame_allocator.allocateFrame();
+                frame = Context.ctx.frame_allocator.?.allocateFrame();
                 const frame_zero: [*]u8 = @ptrFromInt(frame);
                 @memset(frame_zero[0..4096], 0);
                 try page_directory.addMapping(@intCast(page), Constants.virtToPhys(frame) / 4096);
@@ -405,7 +342,7 @@ pub fn elf32_parse_file(file_name: []const u8) !*Process {
     // User stack, the initial esp is set by switch_to_user_mode_process.
     const stack_first_page = (stack_base_virtual_address >> 12) - stack_pages_below_base;
     for (0..stack_pages_below_base + stack_pages_above_base) |i| {
-        const stack_frame = Context.ctx.frame_allocator.allocateFrame();
+        const stack_frame = Context.ctx.frame_allocator.?.allocateFrame();
         const stack_ptr: [*]u8 = @ptrFromInt(stack_frame);
         @memset(stack_ptr[0..4096], 0);
         try page_directory.addMapping(stack_first_page + @as(u32, @intCast(i)), Constants.virtToPhys(stack_frame) / 4096);

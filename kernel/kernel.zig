@@ -16,6 +16,8 @@ const Process = @import("proc/process.zig");
 const KernelContext = @import("context.zig");
 const Timer = @import("drivers/timer.zig");
 const BuildOptions = @import("build_options");
+const Scheduler = @import("proc/scheduler.zig").Scheduler;
+const Ps2 = @import("drivers/ps2.zig");
 
 pub const std_options: std.Options = .{
     .log_level = .debug,
@@ -64,24 +66,26 @@ export fn kmain(magic: u32, multiboot_info: *Grub.MultibootInfo) callconv(.c) vo
     std.log.info("Initial frame: {d}", .{initial_frame});
 
     KernelContext.ctx.frame_allocator = FrameAllocator.init(initial_frame);
-    KernelContext.ctx.slab_allocator = SlabAllocator.init(&KernelContext.ctx.frame_allocator);
-    KernelContext.ctx.allocator = KernelContext.ctx.slab_allocator.allocator();
-
+    KernelContext.ctx.slab_allocator = SlabAllocator.init(&(KernelContext.ctx.frame_allocator orelse @panic("The frame allocator was not set to kernel context")));
+    KernelContext.ctx.allocator = KernelContext.ctx.slab_allocator.?.allocator();
+    KernelContext.ctx.scheduler = .{};
     run(initrd_module) catch |err| @panic(@errorName(err));
 
     while (true) {}
 }
 
 fn run(initrd: *Grub.Module) !void {
-    const allocator = KernelContext.ctx.allocator;
+    const allocator = KernelContext.ctx.allocator orelse @panic("Allocator not set to kernel context before run called");
     KernelContext.ctx.vfs = try Vfs.init(allocator);
-    const vfs = &KernelContext.ctx.vfs;
+    const vfs = &(KernelContext.ctx.vfs orelse @panic("VFS not found in context"));
     std.log.info("VFS initialized", .{});
 
     const tty0 = try allocator.create(Tty);
     const tty1 = try allocator.create(Tty);
     tty0.* = .{};
     tty1.* = .{ .serial_output = true };
+
+    Ps2.subscribe(&Tty.ttyKeyListener) catch |err| std.log.err("Could not subscribe tty listener: {s}", .{@errorName(err)});
 
     _ = try vfs.addEntry("tty0", Inode.Kind.character_device, &.{}, Device{ .tty = tty0 });
     _ = try vfs.addEntry("tty1", Inode.Kind.character_device, &.{}, Device{ .tty = tty1 });
@@ -97,5 +101,9 @@ fn run(initrd: *Grub.Module) !void {
         std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
         return err;
     };
-    process.start();
+
+    // we have the process handle now add it to the scheduler and lets ball!
+    try KernelContext.ctx.scheduler.?.addProcess(process);
+    Scheduler.setBootProcessStack();
+    try KernelContext.ctx.scheduler.?.schedule();
 }
