@@ -1,6 +1,6 @@
 const std = @import("std");
 const Abi = @import("abi.zig");
-const Process = @import("../process.zig");
+const Process = @import("../proc/process.zig");
 const Context = @import("../context.zig");
 const File = @import("../fs/vfs/vfs.zig").File;
 const InterruptRegisters = @import("../arch/x86/idt.zig").InterruptRegisters;

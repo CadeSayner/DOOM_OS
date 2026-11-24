@@ -27,21 +27,20 @@ pub const FrameAllocator = struct {
 
     pub fn allocateConsecutiveFrames(self: *Self, count: u32) u32 {
         if (count == 0) @panic("Cannot allocate 0 frames");
-        var consecutive_count: u32 = 0;
-        var start_index: usize = 0;
+
+        var run: u32 = 0;
+        var start: usize = 0;
 
         for (Self.mmap, 0..) |allocated, i| {
-            if (!allocated) {
-                consecutive_count += 1;
-                if (consecutive_count == count) {
-                    for (&Self.mmap, start_index..start_index + count) |*page, _| {
-                        page.* = true;
-                    }
-                    return self.frameNoToKernelVirtualAddress(@intCast(start_index));
-                }
-            } else {
-                consecutive_count = 0;
-                start_index = i + 1;
+            if (allocated) {
+                run = 0;
+                start = i + 1;
+                continue;
+            }
+            run += 1;
+            if (run == count) {
+                for (start..start + count) |f| Self.mmap[f] = true;
+                return self.frameNoToKernelVirtualAddress(@intCast(start));
             }
         }
         @panic("No sufficient consecutive frames available");
@@ -57,10 +56,8 @@ pub const FrameAllocator = struct {
     }
 
     pub fn freeVaddrFrames(self: *Self, vaddr: u32, count: u32) void {
-        const frame_no = self.kernelVirtualAddressToFrameNo(vaddr);
-        for (&Self.mmap, @intCast(frame_no)..@intCast(frame_no + count)) |*page, _| {
-            page.* = false;
-        }
+        const first: usize = self.kernelVirtualAddressToFrameNo(vaddr);
+        for (first..first + count) |f| Self.mmap[f] = false;
     }
 
     fn kernelVirtualAddressToFrameNo(self: *const Self, vaddr: u32) u32 {

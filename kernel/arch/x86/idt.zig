@@ -1,7 +1,7 @@
 const std = @import("std");
 const Port = @import("../../drivers/port.zig");
 const Ps2 = @import("../../drivers/ps2.zig");
-const Process = @import("../../process.zig");
+const Process = @import("../../proc/process.zig");
 const Timer = @import("../../drivers/timer.zig");
 
 const IDTEntry = packed struct(u64) {

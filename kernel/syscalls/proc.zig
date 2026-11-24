@@ -1,6 +1,6 @@
 const std = @import("std");
 const Abi = @import("abi.zig");
-const Process = @import("../process.zig");
+const Process = @import("../proc/process.zig");
 const Timer = @import("../drivers/timer.zig");
 const InterruptRegisters = @import("../arch/x86/idt.zig").InterruptRegisters;
 

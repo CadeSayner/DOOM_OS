@@ -1,14 +1,14 @@
 const std = @import("std");
-const File = @import("fs/vfs/vfs.zig").File;
-const Constants = @import("lib/constants.zig");
-const FrameAllocator = @import("mm/frame_allocator.zig").FrameAllocator;
-const Timer = @import("drivers/timer.zig");
+const File = @import("../fs/vfs/vfs.zig").File;
+const Constants = @import("../lib/constants.zig");
+const FrameAllocator = @import("../mm/frame_allocator.zig").FrameAllocator;
+const Timer = @import("../drivers/timer.zig");
 
-const Vga = @import("drivers/vga.zig");
-const Ps2 = @import("drivers/ps2.zig");
-const Vfs = @import("fs/vfs/vfs.zig").Vfs;
-const Elf = @import("lib/elf.zig");
-const Context = @import("context.zig");
+const Vga = @import("../drivers/vga.zig");
+const Ps2 = @import("../drivers/ps2.zig");
+const Vfs = @import("../fs/vfs/vfs.zig").Vfs;
+const Elf = @import("../lib/elf.zig");
+const Context = @import("../context.zig");
 
 pub const Status = enum {
     Ready,
@@ -28,8 +28,14 @@ const stack_base_virtual_address = 0xB0000000;
 const stack_pages_above_base = 5;
 const stack_pages_below_base = 59; // the initial user esp sits just above the base
 
+const frames_per_kernel_stack = 2;
+
+// chore: come and make 4096 a global constant for page_size it is used everywhere
+const kernel_stack_size = 4096 * frames_per_kernel_stack;
+
 extern fn switch_to_user_mode_process(e_entry: u32) callconv(.c) void;
 extern fn load_page_table(page_dir_phys: u32) void;
+extern fn switch_context(old_esp: *u32, new_esp: u32) callconv(.c) void;
 
 const PageTable = [1024]u32;
 
@@ -99,10 +105,13 @@ const PageDirectory = struct {
 
 pub const Process = struct {
     pid: u32,
-    entry_point: u32,
+    entry_point: u32, // wont need this remove it later when the starting point will be defined when it gets schedules or do i still need it?
     status: Status,
     page_directory: *PageDirectory, // owns the page directory
     next: ?*Process,
+    saved_esp: u32,
+    kernel_stack_base: u32,
+    kernel_stack_top: u32,
     sbrk: u32,
     brk: u32,
     start_time_ms: u64,
@@ -121,16 +130,22 @@ pub const Process = struct {
         open_fds[0] = try Context.ctx.vfs.open("tty0", Context.ctx.allocator);
         open_fds[1] = try Context.ctx.vfs.open("tty1", Context.ctx.allocator);
 
-        // Same layout as C-OS: a guard page after the image, page aligned. Never below the loaded segments.
         const heap_start: u32 = @max(
             std.mem.alignForward(u32, @intCast(process_start_virtual_address + process_file_size + 0x1000), 0x1000),
             std.mem.alignForward(u32, image_end, 0x1000),
         );
 
+        // this should be inside of a member method
+        const base = Context.ctx.frame_allocator.allocateConsecutiveFrames(frames_per_kernel_stack);
+        const kernel_stack_current = prepare_kernel_stack(base, &taskEntry);
+
         process.* = .{
             .pid = next_pid,
             .entry_point = entry_point,
             .status = .Ready,
+            .kernel_stack_base = base,
+            .kernel_stack_top = base + kernel_stack_size,
+            .saved_esp = kernel_stack_current,
             .page_directory = page_directory,
             .next = null,
             .sbrk = heap_start,
@@ -148,7 +163,6 @@ pub const Process = struct {
         return self.file_descriptors[fd];
     }
 
-    /// Installs a file in the lowest free descriptor slot (after the ttys).
     pub fn addFile(self: *Process, file: *File) ?u32 {
         for (first_free_fd..max_open_files) |fd| {
             if (self.file_descriptors[fd] == null) {
@@ -165,14 +179,12 @@ pub const Process = struct {
         try file.close(Context.ctx.allocator);
     }
 
-    /// Sets the program break. The pages are mapped on demand by the page fault handler.
     pub fn setBrk(self: *Process, new_brk: u32) bool {
         if (new_brk < self.sbrk or new_brk >= linear_frame_buffer_virtual_address) return false;
         self.brk = new_brk;
         return true;
     }
 
-    /// True if [addr, addr + len) lies in user space and is either mapped or inside the lazily mapped heap.
     pub fn isUserRangeValid(self: *const Process, addr: u32, len: u32) bool {
         if (len == 0) return true;
         const end = std.math.add(u32, addr, len) catch return false;
@@ -194,7 +206,6 @@ pub const Process = struct {
         return ptr[0..len];
     }
 
-    /// Reads a NUL terminated string out of user memory.
     pub fn userString(self: *const Process, addr: u32, max_len: u32) ?[]const u8 {
         var len: u32 = 0;
         while (len < max_len) : (len += 1) {
@@ -206,7 +217,6 @@ pub const Process = struct {
         return null;
     }
 
-    /// Drops the process from the process list (its memory is not reclaimed).
     pub fn release(self: *Process) void {
         remove(self.pid);
         if (executing_process == self) executing_process = null;
@@ -219,6 +229,8 @@ pub const Process = struct {
         halt();
     }
 
+    // this function needs to go instead we need the scheduler to do this instead for us to basically schedule a runnable process
+    // and then  switch to it
     pub fn start(self: *Process) void {
         executing_process = self;
         Ps2.subscribe(&ttyKeyListener) catch |err| std.log.err("Could not subscribe tty listener: {s}", .{@errorName(err)});
@@ -233,16 +245,43 @@ pub const Process = struct {
 var process_list: ?*Process = null;
 var executing_process: ?*Process = null;
 
+// this also needs to be cleaned up since this is the schedulers job
 pub fn current() ?*Process {
     return executing_process;
 }
 
-/// There is no scheduler, so a finished process leaves the machine idle.
+pub export fn taskEntry() callconv(.c) noreturn {
+    // no closures which sucks so we need to assume the process we want to start has been scheduled already
+    // well every process has this same function hard coded in their kernel stack when they first start
+
+    // TODO Change to properly use the scheduler not this weird current shit
+    switch_to_user_mode_process(current().?.entry_point);
+    unreachable;
+}
+
+// TODO fix this since process exit should do something
 fn halt() noreturn {
     while (true) asm volatile ("sti; hlt" ::: .{ .memory = true });
 }
 
-/// Keyboard listener: feeds typed characters into the running process's tty0 (its stdin).
+fn prepare_kernel_stack(stack_top: u32, entry: *const fn () callconv(.c) noreturn) u32 {
+    var sp: [*]u32 = @ptrFromInt(stack_top);
+    sp -= 1;
+    sp[0] = 0; // fake return address for entry
+    sp -= 1;
+    sp[0] = @intFromPtr(entry); // popped by 'ret' in switch_context
+    sp -= 1;
+    sp[0] = 0; // ebp
+    sp -= 1;
+    sp[0] = 0; // ebx
+    sp -= 1;
+    sp[0] = 0; // esi
+    sp -= 1;
+    sp[0] = 0; // edi (first pop)
+    return @intFromPtr(sp);
+}
+
+// come back to this since this shouldnt be a thing after we have a /keyboard file that is working
 fn ttyKeyListener(event: Ps2.KeyEvent) void {
     const process = executing_process orelse return;
     const ascii = event.ascii orelse return;

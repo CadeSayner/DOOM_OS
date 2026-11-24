@@ -117,3 +117,7 @@ fn writeTss(comptime index: usize, ss0: u16, esp0: u32) void {
     tss.fs = sel.kernel_data | 3;
     tss.gs = sel.kernel_data | 3;
 }
+
+fn set_kernel_stack(esp0: u32) void {
+    tss.esp0 = esp0;
+}

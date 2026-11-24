@@ -1,5 +1,5 @@
 const Abi = @import("abi.zig");
-const Process = @import("../process.zig");
+const Process = @import("../proc/process.zig");
 const InterruptRegisters = @import("../arch/x86/idt.zig").InterruptRegisters;
 
 /// map_fb() -> virtual address of the linear framebuffer in the caller's address space.

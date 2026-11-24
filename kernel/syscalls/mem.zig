@@ -1,5 +1,5 @@
 const Abi = @import("abi.zig");
-const Process = @import("../process.zig");
+const Process = @import("../proc/process.zig");
 const InterruptRegisters = @import("../arch/x86/idt.zig").InterruptRegisters;
 
 /// brk(addr: ebx) -> current break when addr is 0, 1 on success, -ENOMEM on failure.
