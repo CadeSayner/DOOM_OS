@@ -47,7 +47,6 @@ pub const Scheduler = struct {
         boot_process.page_directory = @ptrCast(&initial_page_dir);
         boot_process.kernel_stack_base = @intFromPtr(&stack_bottom);
         boot_process.kernel_stack_top = @intFromPtr(&stack_top);
-        boot_process.saved_esp = Process.prepareKernelStack(boot_process.kernel_stack_top, &idleLoop);
         boot_process.allocator = Context.ctx.allocator;
     }
 
@@ -62,6 +61,12 @@ pub const Scheduler = struct {
         const flags = irq_save();
 
         const old_process = self.executing_process orelse &boot_process;
+
+        if(self.run_queue.len == 0 and old_process.status == .Running){
+            // just keep the old process running
+            irq_restore(flags);
+            return;
+        }
 
         var process_iterator = self.run_queue.dequeue() orelse &boot_process;
         while (process_iterator.status == .Terminated) {
@@ -94,15 +99,3 @@ pub const Scheduler = struct {
         irq_restore(flags);
     }
 };
-
-fn idleLoop() callconv(.c) noreturn {
-    while (true) {
-        std.log.debug("Running the idleLoop", .{});
-        asm volatile ("sti; hlt" ::: .{ .memory = true });
-        asm volatile ("cli" ::: .{ .memory = true });
-        var sched = Context.ctx.scheduler;
-        if (sched.run_queue.len != 0) {
-            sched.schedule();
-        }
-    }
-}

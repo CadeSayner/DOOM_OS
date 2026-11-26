@@ -13,7 +13,7 @@ const Device = @import("fs/vfs/vfs.zig").Device;
 const Tty = @import("fs/vfs/tty.zig").Tty;
 const TarFs = @import("fs/tarfs/tarfs.zig");
 const Process = @import("proc/process.zig");
-const KernelContext = @import("context.zig");
+const Context = @import("context.zig");
 const Timer = @import("drivers/timer.zig");
 const BuildOptions = @import("build_options");
 const Scheduler = @import("proc/scheduler.zig").Scheduler;
@@ -65,10 +65,10 @@ export fn kmain(magic: u32, multiboot_info: *Grub.MultibootInfo) callconv(.c) vo
 
     std.log.info("Initial frame: {d}", .{initial_frame});
 
-    KernelContext.ctx.frame_allocator = FrameAllocator.init(initial_frame);
-    KernelContext.ctx.slab_allocator = SlabAllocator.init(&KernelContext.ctx.frame_allocator);
-    KernelContext.ctx.allocator = KernelContext.ctx.slab_allocator.allocator();
-    KernelContext.ctx.scheduler = .{};
+    Context.ctx.frame_allocator = FrameAllocator.init(initial_frame);
+    Context.ctx.slab_allocator = SlabAllocator.init(&Context.ctx.frame_allocator);
+    Context.ctx.allocator = Context.ctx.slab_allocator.allocator();
+    Context.ctx.scheduler = .{};
 
     run(initrd_module) catch |err| @panic(@errorName(err));
 
@@ -76,8 +76,8 @@ export fn kmain(magic: u32, multiboot_info: *Grub.MultibootInfo) callconv(.c) vo
 }
 
 fn initKernelVfs(allocator: std.mem.Allocator) !*Vfs {
-    KernelContext.ctx.vfs = try Vfs.init(allocator);
-    const vfs = &KernelContext.ctx.vfs;
+    Context.ctx.vfs = try Vfs.init(allocator);
+    const vfs = &Context.ctx.vfs;
     return vfs;
 }
 
@@ -114,24 +114,32 @@ fn mountFilesystems(initrd: *Grub.Module, vfs: *Vfs) !void {
 }
 
 fn startInitialProcess() !void {
-    const left_process = Process.elf32_parse_file("drawright.elf", KernelContext.ctx.allocator) catch |err| {
+    const doom_process = Process.elf32_parse_file("doom.elf", Context.ctx.allocator) catch |err| {
         std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
         return err;
     };
-    const right_process = Process.elf32_parse_file("drawleft.elf", KernelContext.ctx.allocator) catch |err| {
-        std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
-        return err;
-    };
-    try KernelContext.ctx.scheduler.addProcess(left_process);
-    try KernelContext.ctx.scheduler.addProcess(right_process);
+    try Context.ctx.scheduler.addProcess(doom_process);
     Scheduler.initialiseBootProcess();
-    KernelContext.ctx.scheduler.schedule();
+    Context.ctx.scheduler.schedule();
 }
 
 fn run(initrd: *Grub.Module) !void {
-    const allocator = KernelContext.ctx.allocator;
+    const allocator = Context.ctx.allocator;
     const vfs = try initKernelVfs(allocator);
     try initTtyDevices(allocator, vfs);
     try mountFilesystems(initrd, vfs);
     try startInitialProcess();
+    idleLoop();
+}
+
+pub fn idleLoop() callconv(.c) noreturn {
+    while (true) {
+        asm volatile ("cli" ::: .{ .memory = true });
+
+        if (Context.ctx.scheduler.run_queue.len != 0) {
+            Context.ctx.scheduler.schedule();
+        } else {
+            asm volatile ("sti; hlt" ::: .{ .memory = true });
+        }
+    }
 }
