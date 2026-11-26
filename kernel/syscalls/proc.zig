@@ -8,15 +8,16 @@ const Context = @import("../context.zig");
 const max_path_len = 256;
 
 /// exit(code: ebx): terminates the calling process, does not return.
-pub fn exit(regs: *InterruptRegisters) i32 {
-    const proc = Context.ctx.scheduler.executing_process orelse return -Abi.ESRCH;
-    _ = proc;
+pub fn exit(regs: *InterruptRegisters) noreturn {
+    const proc = Context.ctx.scheduler.executing_process orelse @panic("Exit syscall triggered with no calling process!");
     _ = regs;
-
-    // TODO:
-    // needs to kill the process by removing it from the scheduler queue and
-    //  freeing the processes memory and all the structures it contains
-    return 0;
+    // we basically just need to mark the process as dead and then some reaper thread will come
+    // along later and liberate the memory that it owns including its stack, its page directory and everything
+    // TODO: make the reaper thread work, for now processes just leak
+    proc.status = .Terminated;
+    Context.ctx.scheduler.schedule();
+    //schedule here now which will basically go back to the kernel thread which will must loop
+    unreachable;
 }
 
 /// execve(path: ebx) -> -errno on failure. On success the caller is replaced and this does not return.

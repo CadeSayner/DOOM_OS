@@ -40,8 +40,8 @@ automatically work on this kernel. User programs are built in ReleaseFast
 without SIMD. The libc is a small C-OS-compatible subset, not a complete ISO C
 library: its formatter supports `%s`, `%c`, `%d`, `%i`, `%u`, `%x`, `%X`,
 `%p`, and `%%`, with basic width and precision; unsupported formats fail.
-The initrd filesystem is read-only, there is no scheduler, and a process exit
-halts the system.
+The initrd filesystem is read-only. Exiting a process returns control to the
+kernel; process resources are not yet reclaimed.
 
 Doom controls include WASD to move/turn, F or J to fire, and E, Space, or U
 to use doors. Escape opens the menu. Start a new game from the menu rather

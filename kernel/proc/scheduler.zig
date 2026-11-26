@@ -18,6 +18,7 @@ extern var stack_bottom: [*]u32;
 const run_queue_max_capacity = 1024;
 
 const RunQueue = Queue(run_queue_max_capacity, *Process);
+const ReapQueue = Queue(run_queue_max_capacity, *Process);
 
 // process representing the boot that jsut chills until something eventually happens
 var boot_process: Process = .{
@@ -37,6 +38,7 @@ var boot_process: Process = .{
 
 pub const Scheduler = struct {
     run_queue: RunQueue = .{},
+    reap_queue: ReapQueue = .{},
     executing_process: ?*Process = null,
 
     pub fn initialiseBootProcess() void {
@@ -47,28 +49,35 @@ pub const Scheduler = struct {
         boot_process.allocator = Context.ctx.allocator;
     }
 
-    // TODO error unions should be better handled
     pub fn addProcess(self: *Scheduler, process: *Process) !void {
         const flags = irq_save();
-        // TODO what should we do if too many processes i guess this also throws
         try self.run_queue.enqueue(process);
         irq_restore(flags);
     }
 
     // Schedule a new process to run on the CPU
-    pub fn schedule(self: *Scheduler) !void {
+    pub fn schedule(self: *Scheduler) void {
         const flags = irq_save();
 
         const old_process = self.executing_process orelse &boot_process;
-        const new_process = self.run_queue.dequeue() orelse &boot_process;
+
+        var process_iterator = self.run_queue.dequeue() orelse &boot_process;
+        while (process_iterator.status == .Terminated) {
+            // this will pop the old process off the queue which was the only active reference to it so it needs to be placed on some
+            // kind of reaper queue that is registered maybe here actually4
+            std.log.info("Encountered terminated process, popping", .{});
+            process_iterator = self.run_queue.dequeue() orelse &boot_process;
+        }
+
+        const new_process = process_iterator;
 
         self.executing_process = new_process;
 
         new_process.status = .Running;
-        if (old_process.status != .Waiting and old_process != &boot_process) {
+        if (old_process.status != .Waiting and old_process.status != .Terminated and old_process != &boot_process) {
             // we add to the end of the queue again round robin style baby and put back to ready status
             old_process.status = .Ready;
-            try self.run_queue.enqueue(old_process);
+            self.run_queue.enqueue(old_process) catch @panic("Failed to enqueue process to run queue.");
         }
 
         // set the tss to that processes stack_top
@@ -90,7 +99,7 @@ fn idleLoop() callconv(.c) noreturn {
         asm volatile ("cli" ::: .{ .memory = true });
         var sched = Context.ctx.scheduler;
         if (sched.run_queue.len != 0) {
-            sched.schedule() catch @panic("sched.schedule() failed");
+            sched.schedule();
         }
     }
 }

@@ -118,11 +118,9 @@ fn startInitialProcess() !void {
         std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
         return err;
     };
-
-    // we have the process handle now add it to the scheduler and lets ball!
     try KernelContext.ctx.scheduler.addProcess(process);
     Scheduler.initialiseBootProcess();
-    try KernelContext.ctx.scheduler.schedule();
+    KernelContext.ctx.scheduler.schedule();
 }
 
 fn run(initrd: *Grub.Module) !void {

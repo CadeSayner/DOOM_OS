@@ -3,6 +3,7 @@ const File = @import("../fs/vfs/vfs.zig").File;
 const Constants = @import("../lib/constants.zig");
 const FrameAllocator = @import("../mm/frame_allocator.zig").FrameAllocator;
 const Timer = @import("../drivers/timer.zig");
+const OpenFlags = @import("../syscalls/io.zig").OpenFlags;
 
 const Vga = @import("../drivers/vga.zig");
 const Vfs = @import("../fs/vfs/vfs.zig").Vfs;
@@ -123,11 +124,8 @@ pub const Process = struct {
 
         var open_fds = [_]?*File{null} ** max_open_files;
 
-        // TODO: Instead of unwrapping this stuff everywhere we should have a safe kernel context type that
-        // gets generated and unwraps everything when we assert that everything should exist and then everything
-        // just uses the safe context knowing that it has it this is SHITTTTT
-        open_fds[0] = try Context.ctx.vfs.open("tty0", allocator);
-        open_fds[1] = try Context.ctx.vfs.open("tty1", allocator);
+        open_fds[0] = try Context.ctx.vfs.open("tty0", OpenFlags.rdwr, allocator);
+        open_fds[1] = try Context.ctx.vfs.open("tty1", OpenFlags.rdwr, allocator);
 
         const heap_start: u32 = @max(
             std.mem.alignForward(u32, @intCast(process_start_virtual_address + process_file_size + 0x1000), 0x1000),

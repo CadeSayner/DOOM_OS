@@ -178,7 +178,8 @@ pub const Vfs = struct {
         return error.NotFound;
     }
 
-    pub fn open(self: *Vfs, name: []const u8, allocator: std.mem.Allocator) !*File {
+    pub fn open(self: *Vfs, name: []const u8, flags: u32, allocator: std.mem.Allocator) !*File {
+        _ = flags;
         const inode = self.lookup(name) orelse return error.FileNotFound;
         const file = switch (inode.kind) {
             .file => try TarFile.init(inode).getDescriptor(allocator),
