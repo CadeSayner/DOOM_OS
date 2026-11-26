@@ -1,9 +1,11 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
-const Tty = @import("tty.zig").Tty;
-const TtyFile = @import("tty.zig").TtyFile;
 const TarFile = @import("../tarfs/tarfs.zig").TarFile;
+const Ps2 = @import("../../drivers/ps2.zig");
+const CharacterDevice = @import("character_device.zig");
+const Ps2CharacterDevice = CharacterDevice.CharacterDevice(Ps2.KeyEvent);
+const Ps2CharacterDeviceFile = CharacterDevice.CharacterDeviceFile(Ps2.KeyEvent);
 
 pub const Inode = struct {
     inode_number: usize,
@@ -39,7 +41,8 @@ pub const Inode = struct {
 };
 
 pub const Device = union(enum) {
-    tty: *Tty,
+    ps2_event_char: *Ps2CharacterDevice,
+    tty: *void,
     null: void,
     zero: void,
 };
@@ -54,19 +57,21 @@ pub const Dentry = struct {
 pub const File = struct {
     implementation: Implementation,
 
-    pub const Implementation = union(enum) { tty: TtyFile, tar: TarFile };
+    pub const Implementation = union(enum) { tty: void, tar: TarFile, ps2_char_file: Ps2CharacterDeviceFile };
 
     pub fn read(self: *File, buffer: []u8) !usize {
         return switch (self.implementation) {
-            .tty => |*tty| tty.read(buffer),
+            .tty => error.NotImplemented,
             .tar => |*tar| tar.read(buffer),
+            .ps2_char_file => |*char| char.read(@ptrCast(buffer)),
         };
     }
 
     pub fn write(self: *File, buffer: []const u8) !usize {
         return switch (self.implementation) {
-            .tty => |*tty| tty.write(buffer),
+            .tty => error.NotImplemented,
             .tar => |*tar| tar.write(buffer),
+            .ps2_char_file => error.NotImplemented,
         };
     }
 
@@ -77,20 +82,24 @@ pub const File = struct {
     };
     pub fn seek(self: *File, offset: i32, whence: Whence) !u32 {
         return switch (self.implementation) {
-            .tty => |*tty| tty.seek(offset, whence),
+            .tty => error.NotImplemented,
             .tar => |*tar| tar.seek(offset, whence),
+            .ps2_char_file => error.NotImplemented,
         };
     }
 
     pub fn close(self: *File, allocator: Allocator) !void {
-        switch (self.implementation) {
-            .tty => |*tty| {
-                tty.close(allocator);
-            },
+        // in future this should not be able to throw
+        try switch (self.implementation) {
+            .tty => error.NotImplemented,
+            .ps2_char_file => |*char| {
+                char.close(allocator);
+            } ,
             .tar => |*tar| {
                 tar.close(allocator);
             },
-        }
+            
+        };
         allocator.destroy(self);
     }
 };
@@ -179,18 +188,18 @@ pub const Vfs = struct {
     }
 
     pub fn open(self: *Vfs, name: []const u8, flags: u32, allocator: std.mem.Allocator) !*File {
-        _ = flags;
         const inode = self.lookup(name) orelse return error.FileNotFound;
         const file = switch (inode.kind) {
             .file => try TarFile.init(inode).getDescriptor(allocator),
             .device => {
                 const device = inode.device orelse return error.DeviceNotFound;
                 return switch (device) {
-                    .tty => |tty| blk: {
-                        const f = try tty.getDescriptor(allocator);
+                    .ps2_event_char => |ps2_device| blk: {
+                        const f = try ps2_device.getDescriptor(allocator, flags);
                         inode.addRef();
                         break :blk f;
                     },
+                    .tty => error.DeviceNotFound,
                     .null => error.DeviceNotFound,
                     .zero => error.DeviceNotFound,
                 };

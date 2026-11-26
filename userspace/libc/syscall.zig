@@ -19,8 +19,7 @@ fn checked(result: i32) i32 {
 }
 
 pub export fn open(path: [*:0]const u8, flags: c_int, ...) c_int {
-    _ = flags;
-    return checked(syscall(2, @intFromPtr(path), 0, 0));
+    return checked(syscall(2, @intFromPtr(path), @bitCast(flags), 0));
 }
 
 pub export fn read(fd: c_int, buf: [*]u8, count: usize) isize {

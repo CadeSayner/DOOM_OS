@@ -117,10 +117,11 @@ pub const Process = struct {
     pub fn create(entry_point: u32, start_time_ms: u64, process_file_size: usize, image_end: u32, page_directory: *PageDirectory, allocator: std.mem.Allocator, quantum: u32) !*Process {
         const process = try allocator.create(Process);
 
-        var open_fds = [_]?*File{null} ** max_open_files;
+        const open_fds = [_]?*File{null} ** max_open_files;
 
-        open_fds[0] = try Context.ctx.vfs.open("tty0", OpenFlags.rdwr, allocator);
-        open_fds[1] = try Context.ctx.vfs.open("tty1", OpenFlags.rdwr, allocator);
+        // no std in or stdout for now, once pty is back then we can point every process to the slave side
+        // open_fds[0] = try Context.ctx.vfs.open("tty0", OpenFlags.rdwr, allocator);
+        // open_fds[1] = try Context.ctx.vfs.open("tty1", OpenFlags.rdwr, allocator);
 
         const heap_start: u32 = @max(
             std.mem.alignForward(u32, @intCast(process_start_virtual_address + process_file_size + 0x1000), 0x1000),

@@ -10,7 +10,7 @@ const SlabAllocator = @import("mm/slab_allocator.zig").SlabAllocator;
 const Vfs = @import("fs/vfs/vfs.zig").Vfs;
 const Inode = @import("fs/vfs/vfs.zig").Inode;
 const Device = @import("fs/vfs/vfs.zig").Device;
-const Tty = @import("fs/vfs/tty.zig").Tty;
+const CharacterDevice = @import("fs/vfs/character_device.zig").CharacterDevice;
 const TarFs = @import("fs/tarfs/tarfs.zig");
 const Process = @import("proc/process.zig");
 const Context = @import("context.zig");
@@ -81,30 +81,16 @@ fn initKernelVfs(allocator: std.mem.Allocator) !*Vfs {
     return vfs;
 }
 
-fn initTtyDevices(allocator: std.mem.Allocator, vfs: *Vfs) !void {
+fn initDevices(allocator: std.mem.Allocator, vfs: *Vfs) !void {
     std.log.info("Initialising devices...", .{});
 
-    const tty0_inode = try vfs.createInode(Inode.Kind.device, 0, &.{});
-    const tty1_inode = try vfs.createInode(Inode.Kind.device, 0, &.{});
+    const kb_input_device_inode = try vfs.createInode(Inode.Kind.device, 0, undefined);
+    const kb_input_character_device = try allocator.create(CharacterDevice(Ps2.KeyEvent));
+    kb_input_character_device.* = CharacterDevice(Ps2.KeyEvent).init(kb_input_device_inode);
+    kb_input_device_inode.device = Device{ .ps2_event_char = kb_input_character_device };
+    _ = try vfs.addInode("dev/input", kb_input_device_inode);
 
-    const tty0 = try allocator.create(Tty);
-    const tty1 = try allocator.create(Tty);
-
-    tty0.* = Tty.init(tty0_inode);
-    tty1.* = Tty.init(tty1_inode);
-    tty1.serial_output = true;
-
-    tty0_inode.device = Device{ .tty = tty0 };
-    tty1_inode.device = Device{ .tty = tty1 };
-
-    std.log.info("TTY devices initialised", .{});
-
-    Ps2.subscribe(&Tty.ttyKeyListener) catch |err| std.log.err("Could not subscribe tty listener: {s}", .{@errorName(err)});
-
-    _ = try vfs.addInode("tty0", tty0_inode);
-    _ = try vfs.addInode("tty1", tty1_inode);
-
-    std.log.info("TTY devices added to VFS", .{});
+    std.log.info("Devices added to VFS", .{});
 }
 
 fn mountFilesystem(initrd: *Grub.Module, vfs: *Vfs) !void {
@@ -131,7 +117,7 @@ fn startInitialProcess() !void {
 fn run(initrd: *Grub.Module) !void {
     const allocator = Context.ctx.allocator;
     const vfs = try initKernelVfs(allocator);
-    try initTtyDevices(allocator, vfs);
+    try initDevices(allocator, vfs);
     try mountFilesystem(initrd, vfs);
     try startInitialProcess();
     idleLoop();

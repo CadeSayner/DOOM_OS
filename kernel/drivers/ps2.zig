@@ -1,6 +1,7 @@
 const std = @import("std");
 const Port = @import("port.zig");
 const InterruptRegisters = @import("../arch/x86/idt.zig").InterruptRegisters;
+const CharacterDevice = @import("../fs/vfs/character_device.zig").CharacterDevice;
 
 const kbd_data_port = 0x60;
 const kbd_status_port = 0x64;
@@ -92,9 +93,9 @@ pub fn kbdHandler(regs: *InterruptRegisters) void {
     }
 }
 
-pub const Listener = *const fn (event: KeyEvent) void;
+pub const Listener = CharacterDevice(KeyEvent);
 
-const max_listeners = 16;
+const max_listeners = 1; // for now only one listener is allowed
 
 var listeners: [max_listeners]?Listener = .{null} ** max_listeners;
 var listener_count: usize = 0;
@@ -110,10 +111,11 @@ pub fn subscribe(listener: Listener) !void {
     listener_count += 1;
 }
 
+
 pub fn emit(event: KeyEvent) void {
-    for (listeners[0..listener_count]) |maybe_cb| {
-        if (maybe_cb) |cb| {
-            cb(event);
+    for (listeners[0..listener_count]) |*maybe_cb| {
+        if (maybe_cb.*) |*cb| {
+            cb.sequence_buffer.push(event);
         }
     }
 }
