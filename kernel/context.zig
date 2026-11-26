@@ -7,11 +7,11 @@ const LinearFrameBuffer = @import("drivers/vga.zig").LinearFrameBuffer;
 const Scheduler = @import("proc/scheduler.zig").Scheduler;
 
 pub const KernelContext = struct {
-    allocator: ?std.mem.Allocator = null,
-    frame_allocator: ?FrameAllocator = null,
-    slab_allocator: ?SlabAllocator = null,
-    vfs: ?Vfs = null,
-    scheduler: ?Scheduler = null,
+    allocator: std.mem.Allocator = undefined,
+    frame_allocator: FrameAllocator = undefined,
+    slab_allocator: SlabAllocator = undefined,
+    vfs: Vfs = undefined,
+    scheduler: Scheduler = undefined,
 };
 
 // Initialize fields in place: the slab allocator and allocator point into ctx.

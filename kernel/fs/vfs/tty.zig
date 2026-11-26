@@ -18,7 +18,7 @@ pub const Tty = struct {
     }
 
     pub fn ttyKeyListener(event: Ps2.KeyEvent) void {
-        const process = Context.ctx.scheduler.?.executing_process orelse return;
+        const process = Context.ctx.scheduler.executing_process orelse return;
         const ascii = event.ascii orelse return;
         if (!event.pressed) return;
         const stdin = process.getFile(0) orelse return;

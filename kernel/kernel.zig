@@ -66,8 +66,8 @@ export fn kmain(magic: u32, multiboot_info: *Grub.MultibootInfo) callconv(.c) vo
     std.log.info("Initial frame: {d}", .{initial_frame});
 
     KernelContext.ctx.frame_allocator = FrameAllocator.init(initial_frame);
-    KernelContext.ctx.slab_allocator = SlabAllocator.init(&(KernelContext.ctx.frame_allocator orelse @panic("The frame allocator was not set to kernel context")));
-    KernelContext.ctx.allocator = KernelContext.ctx.slab_allocator.?.allocator();
+    KernelContext.ctx.slab_allocator = SlabAllocator.init(&KernelContext.ctx.frame_allocator);
+    KernelContext.ctx.allocator = KernelContext.ctx.slab_allocator.allocator();
     KernelContext.ctx.scheduler = .{};
 
     run(initrd_module) catch |err| @panic(@errorName(err));
@@ -77,7 +77,7 @@ export fn kmain(magic: u32, multiboot_info: *Grub.MultibootInfo) callconv(.c) vo
 
 fn initKernelVfs(allocator: std.mem.Allocator) !*Vfs {
     KernelContext.ctx.vfs = try Vfs.init(allocator);
-    const vfs = &(KernelContext.ctx.vfs orelse @panic("VFS not found in context"));
+    const vfs = &KernelContext.ctx.vfs;
     return vfs;
 }
 
@@ -121,13 +121,13 @@ fn startInitialProcess() !void {
     };
 
     // we have the process handle now add it to the scheduler and lets ball!
-    try KernelContext.ctx.scheduler.?.addProcess(process);
+    try KernelContext.ctx.scheduler.addProcess(process);
     Scheduler.setBootProcessStack();
-    try KernelContext.ctx.scheduler.?.schedule();
+    try KernelContext.ctx.scheduler.schedule();
 }
 
 fn run(initrd: *Grub.Module) !void {
-    const allocator = KernelContext.ctx.allocator orelse @panic("Allocator not set to kernel context before run called");
+    const allocator = KernelContext.ctx.allocator;
     const vfs = try initKernelVfs(allocator);
     try initTtyDevices(allocator, vfs);
     try mountFilesystems(initrd, vfs);

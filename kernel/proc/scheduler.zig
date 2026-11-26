@@ -53,6 +53,7 @@ pub const Scheduler = struct {
         irq_restore(flags);
     }
 
+    // Schedule a new process to run on the CPU
     pub fn schedule(self: *Scheduler) !void {
         std.log.info("Trying to schedule process", .{});
         const flags = irq_save();
@@ -69,17 +70,13 @@ pub const Scheduler = struct {
             try self.run_queue.enqueue(old_process);
         }
 
-       std.log.info("Made it pass enquiining", .{}); 
-
         // set the tss to that processes stack_top
         Gdt.setKernelStack(new_process.kernel_stack_top);
 
         //load the page table of that process
         load_page_table(Constants.virtToPhys(@intFromPtr(new_process.page_directory)));
 
-        std.log.info("made it past the page table loading", .{});
         // switch over to that process
-        std.log.info("The new new process has saved esp of {x}", .{new_process.saved_esp});
         switch_context(&old_process.saved_esp, new_process.saved_esp);
 
         irq_restore(flags);
@@ -90,10 +87,7 @@ fn idleLoop() callconv(.c) noreturn {
     while (true) {
         asm volatile ("sti; hlt" ::: .{ .memory = true });
         asm volatile ("cli" ::: .{ .memory = true });
-
-        var sched = Context.ctx.scheduler orelse
-            @panic("idleLoop entered before Context.ctx.scheduler was initialized");
-
+        var sched = Context.ctx.scheduler;
         if (sched.run_queue.len != 0) {
             sched.schedule() catch @panic("sched.schedule() failed");
         }

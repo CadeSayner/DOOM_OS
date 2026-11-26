@@ -61,7 +61,7 @@ pub const PageDirectory = struct {
         const pte_index: usize = @intCast(page_number & 0x3FF);
 
         if (self.page_directory_table[pde_index] == 0) {
-            const pt_slice = try Context.ctx.allocator.?.alignedAlloc(u32, .fromByteUnits(4096), 1024);
+            const pt_slice = try Context.ctx.allocator.alignedAlloc(u32, .fromByteUnits(4096), 1024);
             @memset(pt_slice, 0);
 
             const pt_virt: usize = @intFromPtr(pt_slice.ptr);
@@ -122,16 +122,16 @@ pub const Process = struct {
         image_end: u32,
         page_directory: *PageDirectory,
     ) !*Process {
-        const process = try Context.ctx.allocator.?.create(Process);
+        const process = try Context.ctx.allocator.create(Process);
 
         var open_fds = [_]?*File{null} ** max_open_files;
 
         // TODO: Instead of unwrapping this stuff everywhere we should have a safe kernel context type that
         // gets generated and unwraps everything when we assert that everything should exist and then everything
         // just uses the safe context knowing that it has it this is SHITTTTT
-        const allocator = Context.ctx.allocator orelse @panic("No allocator in context");
-        open_fds[0] = try Context.ctx.vfs.?.open("tty0", allocator);
-        open_fds[1] = try Context.ctx.vfs.?.open("tty1", allocator);
+        const allocator = Context.ctx.allocator;
+        open_fds[0] = try Context.ctx.vfs.open("tty0", allocator);
+        open_fds[1] = try Context.ctx.vfs.open("tty1", allocator);
 
         const heap_start: u32 = @max(
             std.mem.alignForward(u32, @intCast(process_start_virtual_address + process_file_size + 0x1000), 0x1000),
@@ -139,7 +139,7 @@ pub const Process = struct {
         );
 
         // this should be inside of a member method
-        const base = Context.ctx.frame_allocator.?.allocateConsecutiveFrames(frames_per_kernel_stack);
+        const base = Context.ctx.frame_allocator.allocateConsecutiveFrames(frames_per_kernel_stack);
         const kernel_stack_current = prepareKernelStack(base + kernel_stack_size, &taskEntry);
 
         process.* = .{
@@ -177,7 +177,7 @@ pub const Process = struct {
     pub fn closeFile(self: *Process, fd: u32) !void {
         const file = self.getFile(fd) orelse return error.BadFileDescriptor;
         self.file_descriptors[fd] = null;
-        try file.close(Context.ctx.allocator orelse @panic("No allocator provided to closeFile"));
+        try file.close(Context.ctx.allocator);
     }
 
     pub fn setBrk(self: *Process, new_brk: u32) bool {
@@ -236,15 +236,10 @@ pub const Process = struct {
     }
 };
 
-var process_list: ?*Process = null;
-var executing_process: ?*Process = null;
-
 pub export fn taskEntry() callconv(.c) noreturn {
-    // no closures which sucks so we need to assume the process we want to start has been scheduled already
-    // well every process has this same function hard coded in their kernel stack when they first start
-
-    // TODO Change to properly use the scheduler not this weird current shit
-    switch_to_user_mode_process(Context.ctx.scheduler.?.executing_process.?.entry_point);
+    const executing_process = Context.ctx.scheduler.executing_process orelse
+        @panic("taskEntry was entered before a process was scheduled!");
+    switch_to_user_mode_process(executing_process.entry_point);
     unreachable;
 }
 
@@ -256,9 +251,9 @@ fn halt() noreturn {
 var next_pid: u32 = 1;
 
 pub fn page_fault_handler(faulting_address: u32) i32 {
-    const proc = Context.ctx.scheduler.?.executing_process orelse return -1;
+    const proc = Context.ctx.scheduler.executing_process orelse return -1;
     if (faulting_address <= proc.brk and faulting_address >= proc.sbrk) {
-        const new_page_frame_vaddr = Context.ctx.frame_allocator.?.allocateFrame();
+        const new_page_frame_vaddr = Context.ctx.frame_allocator.allocateFrame();
         const frame: [*]u8 = @ptrFromInt(new_page_frame_vaddr);
         @memset(frame[0..Constants.frame_size], 0);
         proc.page_directory.addMapping(faulting_address >> 12, Constants.virtToPhys(new_page_frame_vaddr) >> 12) catch return -1;
@@ -269,25 +264,20 @@ pub fn page_fault_handler(faulting_address: u32) i32 {
 
 pub fn elf32_parse_file(file_name: []const u8) !*Process {
     std.log.info("Looking up file: {s}", .{file_name});
-    const exec_file_inode = Context.ctx.vfs.?.lookup(file_name);
+    const exec_file_inode = Context.ctx.vfs.lookup(file_name) orelse return error.FileNotFound;
     std.log.info("File inode: {x}", .{@intFromPtr(exec_file_inode)});
-    if (exec_file_inode == null) {
-        return error.FileNotFound;
-    }
-
-    const inode = exec_file_inode.?;
-    const file_base = @intFromPtr(inode.data.ptr);
+    const file_base = @intFromPtr(exec_file_inode.data.ptr);
     std.log.info("File base address: {x}", .{file_base});
 
     const header: *const Elf.Elf32Ehdr = @ptrFromInt(file_base);
     std.log.info("ELF header address: {x}", .{file_base});
 
-    if (inode.data.len < @sizeOf(Elf.Elf32Ehdr) or !std.mem.eql(u8, header.e_ident[0..4], "\x7fELF") or header.e_ident[4] != 1) {
+    if (exec_file_inode.data.len < @sizeOf(Elf.Elf32Ehdr) or !std.mem.eql(u8, header.e_ident[0..4], "\x7fELF") or header.e_ident[4] != 1) {
         return error.InvalidElf;
     }
 
     // Create the address space.
-    const page_directory = try Context.ctx.allocator.?.create(PageDirectory);
+    const page_directory = try Context.ctx.allocator.create(PageDirectory);
     _ = page_directory.init();
 
     const phdr: [*]const Elf.Elf32Phdr = @ptrFromInt(
@@ -312,7 +302,7 @@ pub fn elf32_parse_file(file_name: []const u8) !*Process {
             if (page_directory.lookup(@intCast(page))) |existing| {
                 frame = Constants.physToVirt(existing * 4096);
             } else {
-                frame = Context.ctx.frame_allocator.?.allocateFrame();
+                frame = Context.ctx.frame_allocator.allocateFrame();
                 const frame_zero: [*]u8 = @ptrFromInt(frame);
                 @memset(frame_zero[0..4096], 0);
                 try page_directory.addMapping(@intCast(page), Constants.virtToPhys(frame) / 4096);
@@ -342,7 +332,7 @@ pub fn elf32_parse_file(file_name: []const u8) !*Process {
     // User stack, the initial esp is set by switch_to_user_mode_process.
     const stack_first_page = (stack_base_virtual_address >> 12) - stack_pages_below_base;
     for (0..stack_pages_below_base + stack_pages_above_base) |i| {
-        const stack_frame = Context.ctx.frame_allocator.?.allocateFrame();
+        const stack_frame = Context.ctx.frame_allocator.allocateFrame();
         const stack_ptr: [*]u8 = @ptrFromInt(stack_frame);
         @memset(stack_ptr[0..4096], 0);
         try page_directory.addMapping(stack_first_page + @as(u32, @intCast(i)), Constants.virtToPhys(stack_frame) / 4096);
@@ -352,7 +342,7 @@ pub fn elf32_parse_file(file_name: []const u8) !*Process {
     return try Process.create(
         header.e_entry,
         Timer.get_ticks(),
-        exec_file_inode.?.size,
+        exec_file_inode.size,
         image_end,
         page_directory,
     );
