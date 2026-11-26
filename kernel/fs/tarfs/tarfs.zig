@@ -2,6 +2,7 @@ const Grub = @import("../../lib/grub.zig");
 const Vfs = @import("../vfs/vfs.zig").Vfs;
 const std = @import("std");
 const InodeKind = @import("../vfs/vfs.zig").Inode.Kind;
+const Inode = @import("../vfs/vfs.zig").Inode;
 const Constants = @import("../../lib/constants.zig");
 const File = @import("../vfs/vfs.zig").File;
 
@@ -53,7 +54,7 @@ pub fn mountTarFs(initrd: *Grub.Module, vfs: *Vfs) !void {
         const is_directory = tar_header.typeflag == @intFromEnum(TarTypeFlag.directory);
         const payload_ptr: [*]const u8 = @ptrFromInt(@intFromPtr(tar_header) + @sizeOf(TarHeader));
         const data: []const u8 = if (is_directory) &.{} else payload_ptr[0..size];
-        _ = try vfs.addEntry(&tar_header.name, if (is_directory) InodeKind.directory else InodeKind.file, data, null);
+        _ = try vfs.addEntry(&tar_header.name, if (is_directory) InodeKind.directory else InodeKind.file, data, data.len);
 
         const next_header_addr = addr + @sizeOf(TarHeader) + ((size + tar_block_size - 1) / tar_block_size) * tar_block_size;
         tar_header = @ptrFromInt(next_header_addr);
@@ -71,18 +72,22 @@ fn parseOctal(raw: [12]u8) !usize {
 pub const TarFile = struct {
     data: []const u8,
     offset: usize = 0,
+    inode: *Inode,
 
-    pub fn init(data: []const u8) TarFile {
+    pub fn init(inode: *Inode) TarFile {
         return TarFile{
-            .data = data,
+            .data = inode.data,
             .offset = 0,
+            .inode = inode,
         };
     }
 
     pub fn getDescriptor(self: TarFile, allocator: std.mem.Allocator) !*File {
         const file = try allocator.create(File);
         file.* = .{
-            .implementation = .{ .tar = self },
+            .implementation = .{
+                .tar = self,
+            },
         };
         return file;
     }
@@ -122,5 +127,9 @@ pub const TarFile = struct {
 
         self.offset = @intCast(new_offset);
         return @intCast(new_offset);
+    }
+
+    pub fn close(self: *TarFile, allocator: std.mem.Allocator) void {
+        self.inode.removeRef(allocator);
     }
 };

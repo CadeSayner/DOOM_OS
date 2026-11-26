@@ -36,6 +36,7 @@ pub fn errnoOf(err: anyerror) i32 {
         error.IsDirectory => EISDIR,
         error.BadFileDescriptor => EBADF,
         error.InvalidSeek => EINVAL,
+        error.QueueFull => EINVAL,
         error.Unsupported => ESPIPE,
         error.ReadOnlyFilesystem => EBADF,
         error.OutOfMemory => ENOMEM,

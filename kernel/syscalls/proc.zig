@@ -28,7 +28,7 @@ pub fn execve(regs: *InterruptRegisters) i32 {
 
     const new_proc = Process.elf32_parse_file(path) catch |err| return Abi.errnoOf(err);
 
-    Context.ctx.scheduler.?.addProcess(new_proc);
+    Context.ctx.scheduler.?.addProcess(new_proc) catch |err| return Abi.errnoOf(err);
 
     return 0;
 }

@@ -10,9 +10,32 @@ pub const Inode = struct {
     kind: Kind,
     size: usize,
     data: []const u8,
-    device: ?Device,
+    device: ?Device = null,
+    refs: usize = 0,
+    nlinks: usize = 0,
+    pub const Kind = enum { file, directory, device };
 
-    pub const Kind = enum { file, directory, character_device };
+    pub fn addLink(self: *Inode) void {
+        self.nlinks += 1;
+    }
+
+    pub fn removeLink(self: *Inode, allocator: std.mem.Allocator) void {
+        self.nlinks -= 1;
+        if (self.nlinks == 0 and self.refs == 0) {
+            allocator.destroy(self);
+        }
+    }
+
+    pub fn addRef(self: *Inode) void {
+        self.refs += 1;
+    }
+
+    pub fn removeRef(self: *Inode, allocator: std.mem.Allocator) void {
+        self.refs -= 1;
+        if (self.nlinks == 0 and self.refs == 0) {
+            allocator.destroy(self);
+        }
+    }
 };
 
 pub const Device = union(enum) {
@@ -35,13 +58,15 @@ pub const File = struct {
 
     pub fn read(self: *File, buffer: []u8) !usize {
         return switch (self.implementation) {
-            inline else => |*impl| impl.read(buffer),
+            .tty => |*tty| tty.read(buffer),
+            .tar => |*tar| tar.read(buffer),
         };
     }
 
     pub fn write(self: *File, buffer: []const u8) !usize {
         return switch (self.implementation) {
-            inline else => |*impl| impl.write(buffer),
+            .tty => |*tty| tty.write(buffer),
+            .tar => |*tar| tar.write(buffer),
         };
     }
 
@@ -52,11 +77,20 @@ pub const File = struct {
     };
     pub fn seek(self: *File, offset: i32, whence: Whence) !u32 {
         return switch (self.implementation) {
-            inline else => |*impl| impl.seek(offset, whence),
+            .tty => |*tty| tty.seek(offset, whence),
+            .tar => |*tar| tar.seek(offset, whence),
         };
     }
 
     pub fn close(self: *File, allocator: Allocator) !void {
+        switch (self.implementation) {
+            .tty => |*tty| {
+                tty.close(allocator);
+            },
+            .tar => |*tar| {
+                tar.close(allocator);
+            },
+        }
         allocator.destroy(self);
     }
 };
@@ -82,25 +116,35 @@ pub const Vfs = struct {
         };
     }
 
-    pub fn addEntry(self: *Vfs, name: []const u8, kind: Inode.Kind, data: []const u8, device: ?Device) !*Inode {
-        const inode = try self.allocator.create(Inode);
-        inode.* = .{
-            .inode_number = self.next_inode_number,
-            .kind = kind,
-            .size = data.len,
-            .data = data,
-            .device = device,
-        };
-
-        self.next_inode_number += 1;
+    // adds an inode to the vfs directly, the caller must provide a valid inode created by createInode
+    pub fn addInode(self: *Vfs, name: []const u8, inode: *Inode) !*Inode {
         const dentry = try self.allocator.create(Dentry);
         dentry.* = .{
             .name = name,
             .inode = inode,
             .next = self.dentries,
         };
-
+        inode.addLink();
         self.dentries = dentry;
+        return inode;
+    }
+
+    // create an inode in the vfs
+    pub fn createInode(self: *Vfs, kind: Inode.Kind, size: usize, data: []const u8) !*Inode {
+        const inode = try self.allocator.create(Inode);
+        inode.* = .{
+            .inode_number = self.next_inode_number,
+            .kind = kind,
+            .size = size,
+            .data = data,
+        };
+        self.next_inode_number += 1;
+        return inode;
+    }
+
+    pub fn addEntry(self: *Vfs, name: []const u8, kind: Inode.Kind, data: []const u8, size: usize) !*Inode {
+        const inode = try self.createInode(kind, size, data);
+        _ = try self.addInode(name, inode);
         return inode;
     }
 
@@ -116,15 +160,17 @@ pub const Vfs = struct {
         return null;
     }
 
+    // TODO: Instead of just freeing everything like this the inode should be reference counted, the dentry can be removed without incident
     pub fn removeEntry(self: *Vfs, name: []const u8) !void {
         var link = &self.dentries;
         while (link.*) |entry| {
             if (std.mem.eql(u8, entry.name, name)) {
                 link.* = entry.next;
-                self.allocator.free(entry.inode.data);
-                self.allocator.destroy(entry.inode);
+                // self.allocator.free(entry.inode.data);
+                // self.allocator.destroy(entry.inode);
                 self.allocator.free(entry.name);
                 self.allocator.destroy(entry);
+                entry.inode.removeLink();
                 return;
             }
             link = &entry.next;
@@ -134,18 +180,24 @@ pub const Vfs = struct {
 
     pub fn open(self: *Vfs, name: []const u8, allocator: std.mem.Allocator) !*File {
         const inode = self.lookup(name) orelse return error.FileNotFound;
-        return switch (inode.kind) {
-            .file => try TarFile.init(inode.data).getDescriptor(allocator),
-            .character_device => {
+        const file = switch (inode.kind) {
+            .file => try TarFile.init(inode).getDescriptor(allocator),
+            .device => {
                 const device = inode.device orelse return error.DeviceNotFound;
                 return switch (device) {
-                    .tty => |tty| tty.getDescriptor(allocator),
+                    .tty => |tty| blk: {
+                        const f = try tty.getDescriptor(allocator);
+                        inode.addRef();
+                        break :blk f;
+                    },
                     .null => error.DeviceNotFound,
                     .zero => error.DeviceNotFound,
                 };
             },
-            .directory => error.IsDirectory,
+            .directory => return error.IsDirectory,
         };
+        inode.addRef();
+        return file;
     }
 
     pub fn ls(self: *Vfs) void {

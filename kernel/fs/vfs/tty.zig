@@ -5,14 +5,17 @@ const Serial = @import("../../drivers/serial.zig");
 const Ps2 = @import("../../drivers/ps2.zig");
 const Context = @import("../../context.zig");
 
-// need to implement open
-
 pub const Tty = struct {
     ring_buffer: [1024]u8 = undefined,
     head: usize = 0,
     tail: usize = 0,
     count: usize = 0,
     serial_output: bool = false,
+    inode: *Inode,
+
+    pub fn init(inode: *Inode) Tty {
+        return .{ .inode = inode };
+    }
 
     pub fn ttyKeyListener(event: Ps2.KeyEvent) void {
         const process = Context.ctx.scheduler.?.executing_process orelse return;
@@ -68,5 +71,9 @@ pub const TtyFile = struct {
         _ = offset;
         _ = whence;
         return error.Unsupported;
+    }
+
+    pub fn close(self: *TtyFile, allocator: std.mem.Allocator) void {
+        self.tty.inode.removeRef(allocator);
     }
 };

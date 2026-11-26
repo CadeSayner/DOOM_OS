@@ -69,33 +69,51 @@ export fn kmain(magic: u32, multiboot_info: *Grub.MultibootInfo) callconv(.c) vo
     KernelContext.ctx.slab_allocator = SlabAllocator.init(&(KernelContext.ctx.frame_allocator orelse @panic("The frame allocator was not set to kernel context")));
     KernelContext.ctx.allocator = KernelContext.ctx.slab_allocator.?.allocator();
     KernelContext.ctx.scheduler = .{};
+
     run(initrd_module) catch |err| @panic(@errorName(err));
 
     while (true) {}
 }
 
-fn run(initrd: *Grub.Module) !void {
-    const allocator = KernelContext.ctx.allocator orelse @panic("Allocator not set to kernel context before run called");
+fn initKernelVfs(allocator: std.mem.Allocator) !*Vfs {
     KernelContext.ctx.vfs = try Vfs.init(allocator);
     const vfs = &(KernelContext.ctx.vfs orelse @panic("VFS not found in context"));
-    std.log.info("VFS initialized", .{});
+    return vfs;
+}
+
+fn initTtyDevices(allocator: std.mem.Allocator, vfs: *Vfs) !void {
+    std.log.info("Initialising devices...", .{});
+
+    const tty0_inode = try vfs.createInode(Inode.Kind.device, 0, &.{});
+    const tty1_inode = try vfs.createInode(Inode.Kind.device, 0, &.{});
 
     const tty0 = try allocator.create(Tty);
     const tty1 = try allocator.create(Tty);
-    tty0.* = .{};
-    tty1.* = .{ .serial_output = true };
+
+    tty0.* = Tty.init(tty0_inode);
+    tty1.* = Tty.init(tty1_inode);
+
+    tty0_inode.device = Device{ .tty = tty0 };
+    tty1_inode.device = Device{ .tty = tty1 };
+
+    std.log.info("TTY devices initialised", .{});
 
     Ps2.subscribe(&Tty.ttyKeyListener) catch |err| std.log.err("Could not subscribe tty listener: {s}", .{@errorName(err)});
 
-    _ = try vfs.addEntry("tty0", Inode.Kind.character_device, &.{}, Device{ .tty = tty0 });
-    _ = try vfs.addEntry("tty1", Inode.Kind.character_device, &.{}, Device{ .tty = tty1 });
+    _ = try vfs.addInode("tty0", tty0_inode);
+    _ = try vfs.addInode("tty1", tty1_inode);
 
     std.log.info("TTY devices added to VFS", .{});
+}
+
+fn mountFilesystems(initrd: *Grub.Module, vfs: *Vfs) !void {
     try TarFs.mountTarFs(initrd, vfs);
     std.log.info("TarFs mounted", .{});
 
     vfs.ls();
+}
 
+fn startInitialProcess() !void {
     std.log.info("Starting {s}", .{BuildOptions.program});
     const process = Process.elf32_parse_file(BuildOptions.program) catch |err| {
         std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
@@ -106,4 +124,12 @@ fn run(initrd: *Grub.Module) !void {
     try KernelContext.ctx.scheduler.?.addProcess(process);
     Scheduler.setBootProcessStack();
     try KernelContext.ctx.scheduler.?.schedule();
+}
+
+fn run(initrd: *Grub.Module) !void {
+    const allocator = KernelContext.ctx.allocator orelse @panic("Allocator not set to kernel context before run called");
+    const vfs = try initKernelVfs(allocator);
+    try initTtyDevices(allocator, vfs);
+    try mountFilesystems(initrd, vfs);
+    try startInitialProcess();
 }
