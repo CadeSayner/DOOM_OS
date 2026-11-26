@@ -2,30 +2,31 @@
 // Created by cade on 6/17/26.
 //
 #include "doomgeneric.h"
-#include  "stdint.h"
-#include "stddef.h"
+#include "doomkeys.h"
+#include "errno.h"
+#include "input.h"
+#include "stdio.h"
+#include "sysio.h"
 
-// Doom key constants
-#define KEY_ENTER       13
-#define KEY_ESCAPE      27
-#define KEY_LEFTARROW   0xac
-#define KEY_RIGHTARROW  0xae
-#define KEY_UPARROW     0xad
-#define KEY_DOWNARROW   0xaf
-#define KEY_USE         0xa2
-#define KEY_FIRE        0xa3
-
-extern ssize_t read(const int fd, void *buf, const size_t count);
 extern void *map_linear_framebuffer();
 extern void sleep(const uint32_t ms);
 extern uint32_t sys_get_proc_uptime();
 
-
 static uint32_t *os_framebuffer = NULL;
+static int input_fd = -1;
+
+static void input_error(const char *operation, int error)
+{
+    fprintf(stderr, "Doom input %s failed: %d\n", operation, error);
+    exit(error != 0 ? error : 1);
+}
 
 void DG_Init()
 {
     os_framebuffer = (uint32_t *)map_linear_framebuffer();
+    input_fd = open("/dev/input", O_RDONLY | O_NONBLOCK);
+    if (input_fd < 0)
+        input_error("open", errno);
 }
 
 void DG_DrawFrame()
@@ -59,105 +60,65 @@ uint32_t DG_GetTicksMs()
 
 int DG_GetKey(int* pressed, unsigned char* key)
 {
-    typedef struct {
-        unsigned char key;
-        uint32_t release_time;
-        int active;
-        int release_sent;
-    } held_key_t;
+    key_event_t event;
 
-    static held_key_t held[8];
+    for (;;)
+    {
+        ssize_t bytes_read = read(input_fd, &event, sizeof(event));
+        if (bytes_read == 0)
+            return 0;
+        if (bytes_read < 0)
+            input_error("read", errno);
+        if (bytes_read != sizeof(event))
+            input_error("short read", 0);
 
-    uint32_t now = DG_GetTicksMs();
+        unsigned char doom_key = 0;
+        if (event.extended)
+        {
+            switch (event.scan_code)
+            {
+                case 0x48: doom_key = KEY_UPARROW; break;
+                case 0x50: doom_key = KEY_DOWNARROW; break;
+                case 0x4b: doom_key = KEY_LEFTARROW; break;
+                case 0x4d: doom_key = KEY_RIGHTARROW; break;
+                case 0x1c: doom_key = KEY_ENTER; break;
+            }
+        }
+        else
+        {
+            switch (event.scan_code)
+            {
+                case 0x2a: case 0x36: doom_key = KEY_RSHIFT; break;
+                case 0x0e: doom_key = KEY_BACKSPACE; break;
+                case 0x1c: doom_key = KEY_ENTER; break;
+                default:
+                    if (event.scan_code >= 0x3b && event.scan_code <= 0x44)
+                        doom_key = 0x80 + event.scan_code;
+                    else if (event.scan_code == 0x57 || event.scan_code == 0x58)
+                        doom_key = 0x80 + event.scan_code;
+                    else
+                        doom_key = event.ascii;
+                    break;
+            }
+        }
 
-    // First, emit delayed key-up events
-    for (int i = 0; i < 8; i++) {
-        if (held[i].active && !held[i].release_sent && now >= held[i].release_time) {
-            held[i].release_sent = 1;
-            held[i].active = 0;
+        switch (doom_key)
+        {
+            case 'u': case 'e': case ' ': doom_key = KEY_USE; break;
+            case 'w': doom_key = KEY_UPARROW; break;
+            case 's': doom_key = KEY_DOWNARROW; break;
+            case 'a': doom_key = KEY_LEFTARROW; break;
+            case 'd': doom_key = KEY_RIGHTARROW; break;
+            case 'f': case 'j': doom_key = KEY_FIRE; break;
+        }
 
-            *pressed = 0;
-            *key = held[i].key;
+        if (doom_key != 0)
+        {
+            *pressed = event.pressed != 0;
+            *key = doom_key;
             return 1;
         }
     }
-
-    // Then read a new input byte
-    uint8_t input_char = 0;
-    ssize_t bytes_read = read(0, &input_char, 1);
-
-    if (bytes_read <= 0)
-        return 0;
-
-    unsigned char doom_key;
-
-    switch (input_char)
-    {
-        case 27:
-            doom_key = KEY_ESCAPE;
-            break;
-        case 13:
-        case 10:
-            doom_key = KEY_ENTER;
-            break;
-        case 'u': case 'U':
-        case 'e': case 'E':
-        case ' ':
-            doom_key = KEY_USE;
-            break;
-
-        case 'w': case 'W':
-            doom_key = KEY_UPARROW;
-            break;
-        case 's': case 'S':
-            doom_key = KEY_DOWNARROW;
-            break;
-        case 'a': case 'A':
-            doom_key = KEY_LEFTARROW;
-            break;
-        case 'd': case 'D':
-            doom_key = KEY_RIGHTARROW;
-            break;
-
-        case 'f': case 'F':
-        case 'j': case 'J':
-            doom_key = KEY_FIRE;
-            break;
-
-        default:
-            doom_key = input_char;
-            break;
-    }
-
-    // Store/restart fake hold timer
-    int slot = -1;
-
-    for (int i = 0; i < 8; i++) {
-        if (held[i].active && held[i].key == doom_key) {
-            slot = i;
-            break;
-        }
-    }
-
-    if (slot == -1) {
-        for (int i = 0; i < 8; i++) {
-            if (!held[i].active) {
-                slot = i;
-                break;
-            }
-        }
-    }
-
-    if (slot != -1) {
-        held[slot].key = doom_key;
-        held[slot].release_time = now + 120; // key held for 120ms
-        held[slot].active = 1;
-        held[slot].release_sent = 0;
-    }
-
-    *pressed = 1;
-    *key = doom_key;
-    return 1;
 }
 
 void DG_SetWindowTitle(const char *title)

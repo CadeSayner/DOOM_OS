@@ -6,18 +6,21 @@ const CharacterDevice = @import("../fs/vfs/character_device.zig").CharacterDevic
 const kbd_data_port = 0x60;
 const kbd_status_port = 0x64;
 
-var shift_pressed: bool = false;
+var left_shift_pressed: bool = false;
+var right_shift_pressed: bool = false;
+var extended_prefix: bool = false;
 
 const KeyChar = struct {
     normal: u8,
     shifted: u8,
 };
 
-pub const KeyEvent = struct {
+pub const KeyEvent = extern struct {
     scan_code: u8,
-    ascii: ?u8,
-    pressed: bool,
-    shift: bool,
+    ascii: u8,
+    pressed: u8,
+    shift: u8,
+    extended: u8,
 };
 
 const keymap: [256]?KeyChar = blk: {
@@ -79,21 +82,30 @@ fn scanCodeToAscii(scan_code: u8, shifted: bool) ?u8 {
 
 pub fn kbdHandler(regs: *InterruptRegisters) void {
     _ = regs;
-    const scan_code = Port.inb(kbd_data_port);
-    switch (scan_code) {
-        0x2A, 0x36 => shift_pressed = true,
-        0xAA, 0xB6 => shift_pressed = false,
-        else => {
-            const ascii = scanCodeToAscii(scan_code, shift_pressed);
-            if (ascii) |c| {
-                _ = c;
-                emit(.{ .ascii = ascii, .scan_code = scan_code, .pressed = true, .shift = shift_pressed });
-            }
-        },
+    const raw = Port.inb(kbd_data_port);
+    if (raw == 0xE0) {
+        extended_prefix = true;
+        return;
     }
+    const extended = extended_prefix;
+    extended_prefix = false;
+    const pressed = raw & 0x80 == 0;
+    const scan_code = raw & 0x7f;
+    if (!extended) switch (scan_code) {
+        0x2A => left_shift_pressed = pressed,
+        0x36 => right_shift_pressed = pressed,
+        else => {},
+    };
+    emit(.{
+        .ascii = if (extended) 0 else scanCodeToAscii(scan_code, false) orelse 0,
+        .scan_code = scan_code,
+        .pressed = @intFromBool(pressed),
+        .shift = @intFromBool(left_shift_pressed or right_shift_pressed),
+        .extended = @intFromBool(extended),
+    });
 }
 
-pub const Listener = CharacterDevice(KeyEvent);
+pub const Listener = *CharacterDevice(KeyEvent);
 
 const max_listeners = 1; // for now only one listener is allowed
 
@@ -113,8 +125,8 @@ pub fn subscribe(listener: Listener) !void {
 
 
 pub fn emit(event: KeyEvent) void {
-    for (listeners[0..listener_count]) |*maybe_cb| {
-        if (maybe_cb.*) |*cb| {
+    for (listeners[0..listener_count]) |maybe_cb| {
+        if (maybe_cb) |cb| {
             cb.sequence_buffer.push(event);
         }
     }

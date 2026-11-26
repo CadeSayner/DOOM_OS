@@ -10,7 +10,8 @@ const max_path_len = 256;
 /// exit(code: ebx): terminates the calling process, does not return.
 pub fn exit(regs: *InterruptRegisters) noreturn {
     const proc = Context.ctx.scheduler.executing_process orelse @panic("Exit syscall triggered with no calling process!");
-    _ = regs;
+    const code: i32 = @bitCast(regs.ebx);
+    if (code != 0) std.log.err("Process exited with code {d}", .{code});
     // we basically just need to mark the process as dead and then some reaper thread will come
     // along later and liberate the memory that it owns including its stack, its page directory and everything
     // TODO: make the reaper thread work, for now processes just leak

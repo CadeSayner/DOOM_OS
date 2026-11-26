@@ -84,11 +84,12 @@ fn initKernelVfs(allocator: std.mem.Allocator) !*Vfs {
 fn initDevices(allocator: std.mem.Allocator, vfs: *Vfs) !void {
     std.log.info("Initialising devices...", .{});
 
-    const kb_input_device_inode = try vfs.createInode(Inode.Kind.device, 0, undefined);
+    const kb_input_device_inode = try vfs.createInode(Inode.Kind.device, 0, &.{});
     const kb_input_character_device = try allocator.create(CharacterDevice(Ps2.KeyEvent));
     kb_input_character_device.* = CharacterDevice(Ps2.KeyEvent).init(kb_input_device_inode);
     kb_input_device_inode.device = Device{ .ps2_event_char = kb_input_character_device };
     _ = try vfs.addInode("dev/input", kb_input_device_inode);
+    try Ps2.subscribe(kb_input_character_device);
 
     std.log.info("Devices added to VFS", .{});
 }

@@ -11,7 +11,7 @@ pub fn CharacterDevice(T: type) type {
     return struct {
         const Self = @This();
         inode: *Inode,
-        sequence_buffer: SequenceBuffer(T, 1024) = undefined,
+        sequence_buffer: SequenceBuffer(T, 1024) = .{},
         pub fn init(inode: *Inode) Self {
             return .{ .inode = inode };
         }
@@ -37,15 +37,21 @@ pub fn CharacterDeviceFile(T: type) type {
         char: *CharacterDevice(T),
         flags: u32,
 
-        var seq_no : u64 = 0;
+        seq_no: u64 = 0,
 
         pub fn read(self: *Self, out: *T) !usize {
-            if(OpenFlags.has(self.flags, OpenFlags.nonblock)){
-                if (!self.char.sequence_buffer.readAt(seq_no, out)) {
-                    out.* = self.char.sequence_buffer.readOldest();
-                    seq_no += 1;
+            if (OpenFlags.has(self.flags, OpenFlags.nonblock)) {
+                if (!self.char.sequence_buffer.readAt(self.seq_no, out)) {
+                    if (self.char.sequence_buffer.next_seq > self.seq_no) {
+                        out.* = self.char.sequence_buffer.readOldest();
+                        self.seq_no = self.char.sequence_buffer.oldestSeq() + 1;
+                    } else {
+                        return 0;
+                    }
+                } else {
+                    self.seq_no += 1;
                 }
-            }else{
+            } else {
                 std.log.err("Trying to read character device in blocking mode", .{});
                 return error.NotSupported;
             }

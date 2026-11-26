@@ -21,4 +21,7 @@ off_t lseek(int fd, off_t offset, int whence);
 #define STD_IN_FILE_NO 0
 #define STD_OUT_FILE_NO 1
 
+#define O_RDONLY 0x0000
+#define O_NONBLOCK 0x0800
+
 #endif //C_OS_IO_SYSCALLS_H
