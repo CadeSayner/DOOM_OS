@@ -107,7 +107,7 @@ fn initTtyDevices(allocator: std.mem.Allocator, vfs: *Vfs) !void {
     std.log.info("TTY devices added to VFS", .{});
 }
 
-fn mountFilesystems(initrd: *Grub.Module, vfs: *Vfs) !void {
+fn mountFilesystem(initrd: *Grub.Module, vfs: *Vfs) !void {
     try TarFs.mountTarFs(initrd, vfs);
     std.log.info("TarFs mounted", .{});
     vfs.ls();
@@ -118,7 +118,12 @@ fn startInitialProcess() !void {
         std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
         return err;
     };
+    const hello_process = Process.elf32_parse_file("hello.elf", Context.ctx.allocator) catch |err| {
+        std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
+        return err;
+    };
     try Context.ctx.scheduler.addProcess(doom_process);
+    try Context.ctx.scheduler.addProcess(hello_process);
     Scheduler.initialiseBootProcess();
     Context.ctx.scheduler.schedule();
 }
@@ -127,7 +132,7 @@ fn run(initrd: *Grub.Module) !void {
     const allocator = Context.ctx.allocator;
     const vfs = try initKernelVfs(allocator);
     try initTtyDevices(allocator, vfs);
-    try mountFilesystems(initrd, vfs);
+    try mountFilesystem(initrd, vfs);
     try startInitialProcess();
     idleLoop();
 }
