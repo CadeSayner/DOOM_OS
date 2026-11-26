@@ -247,11 +247,7 @@ export fn irqHandler(regs: *InterruptRegisters) callconv(.c) void {
     if (handler) |h| {
         h(regs);
     }
-    // Send EOI to PIC
-    if (regs.int_no >= 40) {
-        Port.outb(0xA0, 0x20);
-    }
-    Port.outb(0x20, 0x20);
+    sendPicEoi(regs.int_no - 32);
 }
 
 export fn isrHandler(regs: *InterruptRegisters) callconv(.c) i32 {
@@ -274,4 +270,11 @@ export fn isrHandler(regs: *InterruptRegisters) callconv(.c) i32 {
         return SYSCALL_ERR_NO;
     }
     return @bitCast(regs.eax);
+}
+
+pub fn sendPicEoi(irq: u32) void {
+    if (irq >= 8) {
+        Port.outb(0xA0, 0x20);
+    }
+    Port.outb(0x20, 0x20);
 }

@@ -4,6 +4,7 @@ const std = @import("std");
 extern fn malloc(size: usize) ?*anyopaque;
 extern fn free(ptr: ?*anyopaque) void;
 extern fn write(fd: c_int, buffer: [*]const u8, count: usize) isize;
+extern fn map_linear_framebuffer() ?*anyopaque;
 
 pub const allocator: std.mem.Allocator = .{
     .ptr = undefined,
@@ -50,4 +51,8 @@ pub fn writeAll(fd: c_int, bytes: []const u8) error{WriteFailed}!void {
         if (n <= 0) return error.WriteFailed;
         written += @intCast(n);
     }
+}
+
+pub fn mapLinearFramebuffer() ?*anyopaque {
+    return map_linear_framebuffer();
 }

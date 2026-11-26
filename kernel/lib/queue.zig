@@ -9,7 +9,7 @@ pub fn Queue(comptime capacity: usize, T: type) type {
         pub fn enqueue(self: *Self, object: T) !void {
             if (self.len == capacity) return error.QueueFull;
             self.buf[self.tail] = object;
-            self.tail = self.tail + 1 % capacity;
+            self.tail = (self.tail + 1) % capacity;
             self.len += 1;
         }
 

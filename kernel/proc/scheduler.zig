@@ -29,6 +29,8 @@ var boot_process: Process = .{
     .saved_esp = 0,
     .kernel_stack_base = undefined,
     .kernel_stack_top = undefined,
+    .ticks_allocated = 10,
+    .ticks_remaining = 10,
     .allocator = undefined,
     .sbrk = 0,
     .brk = 0,
@@ -64,7 +66,7 @@ pub const Scheduler = struct {
         var process_iterator = self.run_queue.dequeue() orelse &boot_process;
         while (process_iterator.status == .Terminated) {
             // this will pop the old process off the queue which was the only active reference to it so it needs to be placed on some
-            // kind of reaper queue that is registered maybe here actually4
+            // kind of reaper queue that is registered maybe here actually
             std.log.info("Encountered terminated process, popping", .{});
             process_iterator = self.run_queue.dequeue() orelse &boot_process;
         }
@@ -95,6 +97,7 @@ pub const Scheduler = struct {
 
 fn idleLoop() callconv(.c) noreturn {
     while (true) {
+        std.log.debug("Running the idleLoop", .{});
         asm volatile ("sti; hlt" ::: .{ .memory = true });
         asm volatile ("cli" ::: .{ .memory = true });
         var sched = Context.ctx.scheduler;

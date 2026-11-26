@@ -111,15 +111,10 @@ pub const Process = struct {
     start_time_ms: u64,
     file_descriptors: [max_open_files]?*File,
     allocator: std.mem.Allocator,
+    ticks_allocated: u32,
+    ticks_remaining: u32,
 
-    pub fn create(
-        entry_point: u32,
-        start_time_ms: u64,
-        process_file_size: usize,
-        image_end: u32,
-        page_directory: *PageDirectory,
-        allocator: std.mem.Allocator,
-    ) !*Process {
+    pub fn create(entry_point: u32, start_time_ms: u64, process_file_size: usize, image_end: u32, page_directory: *PageDirectory, allocator: std.mem.Allocator, quantum: u32) !*Process {
         const process = try allocator.create(Process);
 
         var open_fds = [_]?*File{null} ** max_open_files;
@@ -144,6 +139,8 @@ pub const Process = struct {
             .kernel_stack_top = base + kernel_stack_size,
             .saved_esp = kernel_stack_current,
             .page_directory = page_directory,
+            .ticks_remaining = quantum,
+            .ticks_allocated = quantum,
             .sbrk = heap_start,
             .brk = heap_start,
             .start_time_ms = start_time_ms,
@@ -336,5 +333,6 @@ pub fn elf32_parse_file(file_name: []const u8, allocator: std.mem.Allocator) !*P
         image_end,
         page_directory,
         allocator,
+        10
     );
 }

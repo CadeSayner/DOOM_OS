@@ -92,6 +92,7 @@ fn initTtyDevices(allocator: std.mem.Allocator, vfs: *Vfs) !void {
 
     tty0.* = Tty.init(tty0_inode);
     tty1.* = Tty.init(tty1_inode);
+    tty1.serial_output = true;
 
     tty0_inode.device = Device{ .tty = tty0 };
     tty1_inode.device = Device{ .tty = tty1 };
@@ -113,12 +114,16 @@ fn mountFilesystems(initrd: *Grub.Module, vfs: *Vfs) !void {
 }
 
 fn startInitialProcess() !void {
-    std.log.info("Starting {s}", .{BuildOptions.program});
-    const process = Process.elf32_parse_file(BuildOptions.program, KernelContext.ctx.allocator) catch |err| {
+    const left_process = Process.elf32_parse_file("drawright.elf", KernelContext.ctx.allocator) catch |err| {
         std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
         return err;
     };
-    try KernelContext.ctx.scheduler.addProcess(process);
+    const right_process = Process.elf32_parse_file("drawleft.elf", KernelContext.ctx.allocator) catch |err| {
+        std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
+        return err;
+    };
+    try KernelContext.ctx.scheduler.addProcess(left_process);
+    try KernelContext.ctx.scheduler.addProcess(right_process);
     Scheduler.initialiseBootProcess();
     KernelContext.ctx.scheduler.schedule();
 }
