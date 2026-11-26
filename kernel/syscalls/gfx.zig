@@ -5,6 +5,6 @@ const Context = @import("../context.zig");
 pub fn mapFramebuffer(regs: *InterruptRegisters) i32 {
     _ = regs;
     const proc = Context.ctx.scheduler.executing_process orelse return -Abi.ESRCH;
-    const address = proc.page_directory.mapLinearFrameBuffer() catch return -Abi.ENOMEM;
+    const address = proc.page_directory.mapLinearFrameBuffer(Context.ctx.allocator) catch return -Abi.ENOMEM;
     return @bitCast(address);
 }

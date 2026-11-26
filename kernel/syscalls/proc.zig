@@ -26,7 +26,7 @@ pub fn execve(regs: *InterruptRegisters) i32 {
     while (std.mem.startsWith(u8, path, "./")) path = path[2..];
     while (std.mem.startsWith(u8, path, "/")) path = path[1..];
 
-    const new_proc = Process.elf32_parse_file(path) catch |err| return Abi.errnoOf(err);
+    const new_proc = Process.elf32_parse_file(path, Context.ctx.allocator) catch |err| return Abi.errnoOf(err);
 
     Context.ctx.scheduler.addProcess(new_proc) catch |err| return Abi.errnoOf(err);
 

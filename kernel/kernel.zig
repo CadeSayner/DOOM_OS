@@ -109,20 +109,19 @@ fn initTtyDevices(allocator: std.mem.Allocator, vfs: *Vfs) !void {
 fn mountFilesystems(initrd: *Grub.Module, vfs: *Vfs) !void {
     try TarFs.mountTarFs(initrd, vfs);
     std.log.info("TarFs mounted", .{});
-
     vfs.ls();
 }
 
 fn startInitialProcess() !void {
     std.log.info("Starting {s}", .{BuildOptions.program});
-    const process = Process.elf32_parse_file(BuildOptions.program) catch |err| {
+    const process = Process.elf32_parse_file(BuildOptions.program, KernelContext.ctx.allocator) catch |err| {
         std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
         return err;
     };
 
     // we have the process handle now add it to the scheduler and lets ball!
     try KernelContext.ctx.scheduler.addProcess(process);
-    Scheduler.setBootProcessStack();
+    Scheduler.initialiseBootProcess();
     try KernelContext.ctx.scheduler.schedule();
 }
 

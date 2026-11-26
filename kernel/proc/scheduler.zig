@@ -28,6 +28,7 @@ var boot_process: Process = .{
     .saved_esp = 0,
     .kernel_stack_base = undefined,
     .kernel_stack_top = undefined,
+    .allocator = undefined,
     .sbrk = 0,
     .brk = 0,
     .start_time_ms = 0,
@@ -38,11 +39,12 @@ pub const Scheduler = struct {
     run_queue: RunQueue = .{},
     executing_process: ?*Process = null,
 
-    pub fn setBootProcessStack() void {
+    pub fn initialiseBootProcess() void {
         boot_process.page_directory = @ptrCast(&initial_page_dir);
         boot_process.kernel_stack_base = @intFromPtr(&stack_bottom);
         boot_process.kernel_stack_top = @intFromPtr(&stack_top);
         boot_process.saved_esp = Process.prepareKernelStack(boot_process.kernel_stack_top, &idleLoop);
+        boot_process.allocator = Context.ctx.allocator;
     }
 
     // TODO error unions should be better handled
