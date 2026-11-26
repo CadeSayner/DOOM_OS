@@ -30,8 +30,8 @@ void DG_Init()
 
 void DG_DrawFrame()
 {
-    const int fb_width = 800;
-    const int fb_height = 600;
+    const int fb_width = 1280;
+    const int fb_height = 720;
 
     for (int y = 0; y < fb_height; y++)
     {

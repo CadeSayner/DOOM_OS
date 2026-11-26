@@ -26,11 +26,10 @@ const user_space_end = Constants.kernel_offset;
 const stack_base_virtual_address = 0xB0000000;
 const stack_pages_above_base = 5;
 const stack_pages_below_base = 59; // the initial user esp sits just above the base
-
 const frames_per_kernel_stack = 2;
 
-// chore: come and make 4096 a global constant for page_size it is used everywhere
-const kernel_stack_size = 4096 * frames_per_kernel_stack;
+// chore: come and make Constants.frame_size a global constant for page_size it is used everywhere
+const kernel_stack_size = Constants.frame_size * frames_per_kernel_stack;
 
 extern fn switch_to_user_mode_process(e_entry: u32) callconv(.c) void;
 extern fn load_page_table(page_dir_phys: u32) void;
@@ -61,7 +60,7 @@ pub const PageDirectory = struct {
         const pte_index: usize = @intCast(page_number & 0x3FF);
 
         if (self.page_directory_table[pde_index] == 0) {
-            const pt_slice = try Context.ctx.allocator.alignedAlloc(u32, .fromByteUnits(4096), 1024);
+            const pt_slice = try Context.ctx.allocator.alignedAlloc(u32, .fromByteUnits(Constants.frame_size), 1024);
             @memset(pt_slice, 0);
 
             const pt_virt: usize = @intFromPtr(pt_slice.ptr);
@@ -293,26 +292,26 @@ pub fn elf32_parse_file(file_name: []const u8) !*Process {
         if (end > linear_frame_buffer_virtual_address) return error.InvalidElf;
         image_end = @max(image_end, end);
 
-        const first_page = start / 4096;
-        const last_page = (end + 4095) / 4096;
+        const first_page = start / Constants.frame_size;
+        const last_page = (end + 4095) / Constants.frame_size;
 
         for (first_page..last_page) |page| {
             // A page shared with a previous segment keeps its frame and contents.
             var frame: u32 = undefined;
             if (page_directory.lookup(@intCast(page))) |existing| {
-                frame = Constants.physToVirt(existing * 4096);
+                frame = Constants.physToVirt(existing * Constants.frame_size);
             } else {
                 frame = Context.ctx.frame_allocator.allocateFrame();
                 const frame_zero: [*]u8 = @ptrFromInt(frame);
-                @memset(frame_zero[0..4096], 0);
-                try page_directory.addMapping(@intCast(page), Constants.virtToPhys(frame) / 4096);
+                @memset(frame_zero[0..Constants.frame_size], 0);
+                try page_directory.addMapping(@intCast(page), Constants.virtToPhys(frame) / Constants.frame_size);
             }
 
             const frame_ptr: [*]u8 = @ptrFromInt(frame);
 
-            const page_start = page * 4096;
+            const page_start = page * Constants.frame_size;
             const copy_start = @max(page_start, start);
-            const copy_end = @min(page_start + 4096, start + segment.p_filesz);
+            const copy_end = @min(page_start + Constants.frame_size, start + segment.p_filesz);
 
             if (copy_start >= copy_end) continue;
 
@@ -334,8 +333,8 @@ pub fn elf32_parse_file(file_name: []const u8) !*Process {
     for (0..stack_pages_below_base + stack_pages_above_base) |i| {
         const stack_frame = Context.ctx.frame_allocator.allocateFrame();
         const stack_ptr: [*]u8 = @ptrFromInt(stack_frame);
-        @memset(stack_ptr[0..4096], 0);
-        try page_directory.addMapping(stack_first_page + @as(u32, @intCast(i)), Constants.virtToPhys(stack_frame) / 4096);
+        @memset(stack_ptr[0..Constants.frame_size], 0);
+        try page_directory.addMapping(stack_first_page + @as(u32, @intCast(i)), Constants.virtToPhys(stack_frame) / Constants.frame_size);
     }
 
     std.log.info("Finished loading ELF segments into memory", .{});

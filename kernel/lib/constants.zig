@@ -9,7 +9,7 @@ pub fn physToVirt(phys_addr: u32) u32 {
 
 pub fn virtToPhys(virt_addr: u32) u32 {
     return virt_addr - kernel_offset;
-}  
+}
 
 /// Helper to cast a physical address directly to a typed pointer
 pub fn p2v(comptime T: type, phys_addr: u32) *T {

@@ -55,7 +55,6 @@ pub const Scheduler = struct {
 
     // Schedule a new process to run on the CPU
     pub fn schedule(self: *Scheduler) !void {
-        std.log.info("Trying to schedule process", .{});
         const flags = irq_save();
 
         const old_process = self.executing_process orelse &boot_process;

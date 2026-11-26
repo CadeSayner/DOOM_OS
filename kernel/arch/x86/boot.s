@@ -19,8 +19,8 @@ ALIGN 4
 
     ; graphics initialisations
     DD 0
-    DD 800 ; width
-    DD 600 ; height
+    DD 1280 ; width
+    DD 720 ; height
     DD 32
 
 section .bss

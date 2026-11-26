@@ -1,8 +1,9 @@
 const Grub = @import("../lib/grub.zig");
+const Constants = @import("../lib/constants.zig");
 
 const max_physical_frames = 32768;
 const kernel_offset = 0xC0000000;
-const frame_size = 4096; // Assuming a frame size of 4KB
+const frame_size = Constants.frame_size; // Assuming a frame size of 4KB
 
 pub const FrameAllocator = struct {
     const Self = @This();
