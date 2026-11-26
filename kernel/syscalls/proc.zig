@@ -27,10 +27,9 @@ pub fn execve(regs: *InterruptRegisters) i32 {
     while (std.mem.startsWith(u8, path, "/")) path = path[1..];
 
     const new_proc = Process.elf32_parse_file(path) catch |err| return Abi.errnoOf(err);
-    _ = new_proc;
 
-    // TODOOOO: ionstead add to the scheduler
-    proc.status = .Terminated;
+    Context.ctx.scheduler.?.addProcess(new_proc);
+
     return 0;
 }
 
@@ -43,6 +42,8 @@ pub fn getProcUptime(regs: *InterruptRegisters) i32 {
 
 /// sleep(ms: ebx): waits with interrupts enabled so the timer keeps ticking.
 pub fn sleep(regs: *InterruptRegisters) i32 {
+
+    // TODOOO this needs to change to actually block it and add it to the timers queue and will be woken at some later stage
     const start = Timer.get_millis();
     const ms: u64 = regs.ebx;
     while (Timer.get_millis() -% start < ms) {

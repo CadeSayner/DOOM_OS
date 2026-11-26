@@ -30,7 +30,7 @@ pub fn write(regs: *InterruptRegisters) i32 {
     return @intCast(n);
 }
 
-/// open(path: ebx) -> fd | -errno. Flags/mode are ignored, like in C-OS.
+/// open(path: ebx) -> fd | -errno. Flags/mode are ignored, because I dont care really
 pub fn open(regs: *InterruptRegisters) i32 {
     const proc = Context.ctx.scheduler.?.executing_process orelse return -Abi.ESRCH;
     var path = proc.userString(regs.ebx, max_path_len) orelse return -Abi.EFAULT;
