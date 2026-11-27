@@ -14,7 +14,7 @@ const CharacterDevice = @import("fs/vfs/character_device.zig").CharacterDevice;
 const TarFs = @import("fs/tarfs/tarfs.zig");
 const Process = @import("proc/process.zig");
 const Context = @import("context.zig");
-const Timer = @import("drivers/timer.zig");
+const Timer = @import("drivers/timer.zig").Timer;
 const BuildOptions = @import("build_options");
 const Ps2 = @import("drivers/ps2.zig");
 
@@ -35,9 +35,6 @@ export fn kmain(magic: u32, multiboot_info: *Grub.MultibootInfo) callconv(.c) vo
 
     Idt.init();
     std.log.info("IDT initialized", .{});
-
-    Timer.init();
-    std.log.info("Timer initialized", .{});
 
     Vga.init(multiboot_info);
     std.log.info("VGA Driver initialized", .{});
@@ -68,6 +65,7 @@ export fn kmain(magic: u32, multiboot_info: *Grub.MultibootInfo) callconv(.c) vo
     Context.ctx.slab_allocator = SlabAllocator.init(&Context.ctx.frame_allocator);
     Context.ctx.allocator = Context.ctx.slab_allocator.allocator();
     Context.ctx.scheduler.init();
+    Context.ctx.timer = Timer.init();
 
     run(initrd_module) catch |err| @panic(@errorName(err));
 

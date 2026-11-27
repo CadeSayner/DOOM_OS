@@ -9,6 +9,7 @@ const Vga = @import("../drivers/vga.zig");
 const Vfs = @import("../fs/vfs/vfs.zig").Vfs;
 const Elf = @import("../lib/elf.zig");
 const Context = @import("../context.zig");
+const Waiter = @import("../sched/waiter.zig").Waiter;
 
 pub const Status = enum {
     Ready,
@@ -116,6 +117,7 @@ pub const Process = struct {
     allocator: std.mem.Allocator,
     ticks_allocated: u32,
     ticks_remaining: u32,
+    waiter_ref_count: u32,
 
     pub fn destroy(self: *Process) !void {
         Context.ctx.allocator.destroy(self.page_directory);
@@ -158,10 +160,19 @@ pub const Process = struct {
             .brk = heap_start,
             .start_time_ms = start_time_ms,
             .open_files = open_fds,
+            .waiter_ref_count = 0,
             .allocator = allocator,
         };
 
         return process;
+    }
+
+    pub fn addWaiterRef(self: *Process) void {
+        self.waiter_ref_count += 1;
+    }
+
+    pub fn removeWaiterRef(self: *Process) void {
+        self.waiter_ref_count -= 1;
     }
 
     pub fn createKernelProcess(
@@ -192,7 +203,8 @@ pub const Process = struct {
             .allocator = Context.ctx.allocator,
             .sbrk = 0,
             .brk = 0,
-            .start_time_ms = Timer.get_ticks(),
+            .waiter_ref_count = 0,
+            .start_time_ms = Context.ctx.timer.getMillis(),
             .open_files = .{null} ** max_open_files,
         };
     }
@@ -367,5 +379,5 @@ pub fn elf32_parse_file(file_name: []const u8, allocator: std.mem.Allocator) !*P
         try page_directory.addMapping(stack_first_page + @as(u32, @intCast(i)), Constants.virtToPhys(stack_frame) / Constants.frame_size, allocator);
     }
 
-    return try Process.create(header.e_entry, Timer.get_ticks(), exec_file_inode.size, image_end, page_directory, allocator, 10);
+    return try Process.create(header.e_entry, Context.ctx.timer.getMillis(), exec_file_inode.size, image_end, page_directory, allocator, 10);
 }

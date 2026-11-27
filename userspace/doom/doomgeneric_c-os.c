@@ -55,7 +55,7 @@ void DG_SleepMs(uint32_t ms)
 
 uint32_t DG_GetTicksMs()
 {
-    return sys_get_proc_uptime()*50;
+    return sys_get_proc_uptime();
 }
 
 int DG_GetKey(int* pressed, unsigned char* key)

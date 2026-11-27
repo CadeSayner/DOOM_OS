@@ -4,7 +4,9 @@ const FrameAllocator = @import("mm/frame_allocator.zig").FrameAllocator;
 const SlabAllocator = @import("mm/slab_allocator.zig").SlabAllocator;
 const Vfs = @import("fs/vfs/vfs.zig").Vfs;
 const LinearFrameBuffer = @import("drivers/vga.zig").LinearFrameBuffer;
-const Scheduler = @import("proc/scheduler.zig").Scheduler;
+const Scheduler = @import("sched/scheduler.zig").Scheduler;
+const Timer = @import ("drivers/timer.zig").Timer;
+
 
 pub const KernelContext = struct {
     allocator: std.mem.Allocator = undefined,
@@ -12,6 +14,7 @@ pub const KernelContext = struct {
     slab_allocator: SlabAllocator = undefined,
     vfs: Vfs = undefined,
     scheduler: Scheduler = undefined,
+    timer: Timer = undefined,
 };
 
 // Initialize fields in place: the slab allocator and allocator point into ctx.

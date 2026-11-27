@@ -5,6 +5,9 @@ const Timer = @import("../drivers/timer.zig");
 const InterruptRegisters = @import("../arch/x86/idt.zig").InterruptRegisters;
 const Context = @import("../context.zig");
 
+extern fn irq_save() u32;
+extern fn irq_restore(flags: u32) void;
+
 const max_path_len = 256;
 
 /// exit(code: ebx): terminates the calling process, does not return.
@@ -40,17 +43,22 @@ pub fn execve(regs: *InterruptRegisters) i32 {
 pub fn getProcUptime(regs: *InterruptRegisters) i32 {
     _ = regs;
     const proc = Context.ctx.scheduler.executing_process orelse return -Abi.ESRCH;
-    return @bitCast(@as(u32, @truncate(Timer.get_ticks() -% proc.start_time_ms)));
+    return @bitCast(@as(u32, @truncate(Context.ctx.timer.getMillis() -% proc.start_time_ms)));
 }
 
 /// sleep(ms: ebx): waits with interrupts enabled so the timer keeps ticking.
 pub fn sleep(regs: *InterruptRegisters) i32 {
-
-    // TODOOO this needs to change to actually block it and add it to the timers queue and will be woken at some later stage
-    const start = Timer.get_millis();
     const ms: u64 = regs.ebx;
-    while (Timer.get_millis() -% start < ms) {
-        asm volatile ("sti; nop; hlt; cli" ::: .{ .memory = true });
-    }
+    const flags = irq_save();
+
+    const proc = Context.ctx.scheduler.executing_process orelse {
+        irq_restore(flags);
+        return -Abi.ESRCH;
+    };
+
+    Context.ctx.timer.waiters.add(proc, ms) catch return -Abi.ENOMEM;
+    Context.ctx.scheduler.schedule();
+
+    irq_restore(flags);
     return 0;
 }

@@ -95,11 +95,15 @@ fn reap() callconv(.c) noreturn {
         const flags = irq_save();
         const maybe_process = Context.ctx.scheduler.reap_queue.dequeue();
         irq_restore(flags);
-        const process = maybe_process orelse {
+        const process: *Process = maybe_process orelse {
             asm volatile ("sti; hlt" ::: .{ .memory = true });
             continue;
         };
-        // free the resources associated with the process
+        if(process.waiter_ref_count > 0){
+            // renequeue to be freed later when the waiter expires
+            Context.ctx.scheduler.reap_queue.enqueue(process) catch @panic("Reaping failed due to reap queue overflow.");
+            continue;
+        }
         std.log.info("Reaping process with pid {}", .{process.pid});
         Process.destroy(process) catch |err| {
             std.log.err("Failed to destroy process: {}", .{err});
