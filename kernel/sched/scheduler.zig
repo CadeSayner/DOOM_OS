@@ -99,7 +99,7 @@ fn reap() callconv(.c) noreturn {
             asm volatile ("sti; hlt" ::: .{ .memory = true });
             continue;
         };
-        if(process.waiter_ref_count > 0){
+        if (process.waiter_ref_count > 0) {
             // renequeue to be freed later when the waiter expires
             Context.ctx.scheduler.reap_queue.enqueue(process) catch @panic("Reaping failed due to reap queue overflow.");
             continue;

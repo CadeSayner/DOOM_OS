@@ -1,6 +1,7 @@
 const std = @import("std");
 const Process = @import("../proc/process.zig").Process;
 const Queue = @import("../lib/queue.zig").Queue;
+const Context = @import("../context.zig");
 
 const max_waiters = 64;
 
@@ -16,6 +17,9 @@ pub const Waiter = struct {
         if (self.waiting_process.status != .Terminated) {
             self.waiting_process.status = .Ready;
         }
+        (Context.ctx.scheduler.addProcess(self.waiting_process) catch |err| switch (err) {
+            error.QueueFull => @panic("No more space on the run queue"),
+        });
         self.waiting_process.removeWaiterRef();
     }
 
@@ -41,11 +45,11 @@ pub const TimedWaitList = struct {
     }
 
     pub fn tick(self: *TimedWaitList) void {
-        for(&self.entries) |*slot| {
-            if(slot.*) |*waiter| {
-                if(waiter.ticks_remaining orelse continue > 0){
+        for (&self.entries) |*slot| {
+            if (slot.*) |*waiter| {
+                if (waiter.ticks_remaining orelse continue > 0) {
                     waiter.ticks_remaining.? -= 1;
-                }else{
+                } else {
                     waiter.wake();
                     slot.* = null; // free the space in the list back up for another waiter, invalidating the wake pointer as is required
                 }
@@ -69,7 +73,7 @@ pub const WaitQueue = struct {
     }
 
     pub fn wakeOne(self: *WaitQueue) void {
-        const waiter = self.waiters.dequeue() orelse return;
+        var waiter = self.waiters.dequeue() orelse return;
         waiter.wake();
     }
 };

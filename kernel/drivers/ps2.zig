@@ -125,9 +125,9 @@ pub fn subscribe(listener: Listener) !void {
 
 
 pub fn emit(event: KeyEvent) void {
-    for (listeners[0..listener_count]) |maybe_cb| {
-        if (maybe_cb) |cb| {
-            cb.sequence_buffer.push(event);
+    for (listeners[0..listener_count]) |maybe_cd| {
+        if (maybe_cd) |cd| {
+            cd.push(event);
         }
     }
 }

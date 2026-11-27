@@ -100,11 +100,15 @@ fn mountFilesystem(initrd: *Grub.Module, vfs: *Vfs) !void {
 }
 
 fn startInitialProcess() !void {
-    const doom_process = Process.elf32_parse_file("doom.elf", Context.ctx.allocator) catch |err| {
-        std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
+    // const doom_process = Process.elf32_parse_file("doom.elf", Context.ctx.allocator) catch |err| {
+    //     std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
+    //     return err;
+    // };
+    const test_process = Process.elf32_parse_file("hello.elf", Context.ctx.allocator) catch |err| {
+        std.log.err("Cannot start {s}: {s}", .{ "hello.elf", @errorName(err) });
         return err;
     };
-    try Context.ctx.scheduler.addProcess(doom_process);
+    try Context.ctx.scheduler.addProcess(test_process);
     Context.ctx.scheduler.schedule();
 }
 

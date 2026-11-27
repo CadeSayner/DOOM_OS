@@ -7,6 +7,7 @@ const SequenceBuffer = @import("../../lib/sequence.zig").SequenceBuffer;
 const Context = @import("../../context.zig");
 const OpenFlags = @import("../../syscalls/io.zig").OpenFlags;
 const WaitQueue = @import("../../sched/waiter.zig").WaitQueue;
+const Process = @import("../../proc/process.zig").Process;
 
 extern fn irq_save() u32;
 extern fn irq_restore(flags: u32) void;
@@ -22,6 +23,11 @@ pub fn CharacterDevice(T: type) type {
             return .{ .inode = inode };
         }
 
+        pub fn push(self: *Self, value: T) void {
+            self.sequence_buffer.push(value);
+            self.notifyWaiters();
+        }
+
         pub fn getDescriptor(self: *Self, allocator: std.mem.Allocator, flags: u32) !*File {
             const file = try allocator.create(File);
             file.* = .{
@@ -33,6 +39,14 @@ pub fn CharacterDevice(T: type) type {
                 },
             };
             return file;
+        }
+
+        pub fn addWaiter(self: *Self, process: *Process) !void {
+            try self.waiters.addWaiter(process);
+        }
+
+        pub fn notifyWaiters(self: *Self) void {
+            self.waiters.wakeAll();
         }
     };
 }
@@ -58,21 +72,18 @@ pub fn CharacterDeviceFile(T: type) type {
                     self.seq_no += 1;
                 }
             } else {
-                std.log.info("Trying to read in blocking mode!!", .{});
-
                 const flags = irq_save();
-                try self.char.waiters.addWaiter(Context.ctx.scheduler.executing_process orelse return error.Unsupported);
-
+                const current_proc = Context.ctx.scheduler.executing_process orelse return error.Unsupported;
+                current_proc.status = .Waiting;
+                try self.char.addWaiter(current_proc);
                 Context.ctx.scheduler.schedule();
-
                 irq_restore(flags);
-                return error.NotSupported;
             }
             return @sizeOf(T);
         }
 
         pub fn write(self: *Self, value: T) void {
-            self.char.sequence_buffer.push(value);
+            self.char.push(value);
         }
 
         pub fn seek(self: *Self, offset: i32, whence: File.Whence) !u32 {
