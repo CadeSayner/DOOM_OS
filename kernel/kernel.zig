@@ -16,7 +16,6 @@ const Process = @import("proc/process.zig");
 const Context = @import("context.zig");
 const Timer = @import("drivers/timer.zig");
 const BuildOptions = @import("build_options");
-const Scheduler = @import("proc/scheduler.zig").Scheduler;
 const Ps2 = @import("drivers/ps2.zig");
 
 pub const std_options: std.Options = .{
@@ -68,7 +67,7 @@ export fn kmain(magic: u32, multiboot_info: *Grub.MultibootInfo) callconv(.c) vo
     Context.ctx.frame_allocator = FrameAllocator.init(initial_frame);
     Context.ctx.slab_allocator = SlabAllocator.init(&Context.ctx.frame_allocator);
     Context.ctx.allocator = Context.ctx.slab_allocator.allocator();
-    Context.ctx.scheduler = .{};
+    Context.ctx.scheduler.init();
 
     run(initrd_module) catch |err| @panic(@errorName(err));
 
@@ -111,7 +110,6 @@ fn startInitialProcess() !void {
     };
     try Context.ctx.scheduler.addProcess(doom_process);
     try Context.ctx.scheduler.addProcess(hello_process);
-    Scheduler.initialiseBootProcess();
     Context.ctx.scheduler.schedule();
 }
 

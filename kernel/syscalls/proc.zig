@@ -16,6 +16,7 @@ pub fn exit(regs: *InterruptRegisters) noreturn {
     // along later and liberate the memory that it owns including its stack, its page directory and everything
     // TODO: make the reaper thread work, for now processes just leak
     proc.status = .Terminated;
+    Context.ctx.scheduler.addProcessToReapQueue(proc) catch @panic("Failed to add process to reap queue.");
     Context.ctx.scheduler.schedule();
     //schedule here now which will basically go back to the kernel thread which will must loop
     unreachable;

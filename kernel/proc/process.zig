@@ -35,6 +35,9 @@ const kernel_stack_size = Constants.frame_size * frames_per_kernel_stack;
 extern fn switch_to_user_mode_process(e_entry: u32) callconv(.c) void;
 extern fn load_page_table(page_dir_phys: u32) void;
 extern fn switch_context(old_esp: *u32, new_esp: u32) callconv(.c) void;
+extern var initial_page_dir: [1024]u32;
+extern var stack_top: [*]u32;
+extern var stack_bottom: [*]u32;
 
 const PageTable = [1024]u32;
 
@@ -109,10 +112,19 @@ pub const Process = struct {
     sbrk: u32,
     brk: u32,
     start_time_ms: u64,
-    file_descriptors: [max_open_files]?*File,
+    open_files: [max_open_files]?*File,
     allocator: std.mem.Allocator,
     ticks_allocated: u32,
     ticks_remaining: u32,
+
+    pub fn destroy(self: *Process) !void {
+        Context.ctx.allocator.destroy(self.page_directory);
+        Context.ctx.frame_allocator.freeVaddrFrames(self.kernel_stack_base, frames_per_kernel_stack);
+        for (self.open_files) |file| {
+            if (file) |f| try f.close(self.allocator);
+        }
+        self.allocator.destroy(self);
+    }
 
     pub fn create(entry_point: u32, start_time_ms: u64, process_file_size: usize, image_end: u32, page_directory: *PageDirectory, allocator: std.mem.Allocator, quantum: u32) !*Process {
         const process = try allocator.create(Process);
@@ -145,22 +157,55 @@ pub const Process = struct {
             .sbrk = heap_start,
             .brk = heap_start,
             .start_time_ms = start_time_ms,
-            .file_descriptors = open_fds,
+            .open_files = open_fds,
             .allocator = allocator,
         };
 
         return process;
     }
 
+    pub fn createKernelProcess(
+        quantum: u32,
+        entry_point: ?*const fn () callconv(.c) noreturn,
+    ) Process {
+        const kernel_stack_base = if (entry_point != null)
+            Context.ctx.frame_allocator.allocateConsecutiveFrames(frames_per_kernel_stack)
+        else
+            @intFromPtr(&stack_bottom);
+        const kernel_stack_top = if (entry_point != null)
+            kernel_stack_base + kernel_stack_size
+        else
+            @intFromPtr(&stack_top);
+        return .{
+            .pid = 0,
+            .entry_point = 0,
+            .status = .Running,
+            .page_directory = @ptrCast(&initial_page_dir),
+            .saved_esp = if (entry_point != null)
+                prepareKernelStack(kernel_stack_top, entry_point.?)
+            else
+                0,
+            .kernel_stack_base = kernel_stack_base,
+            .kernel_stack_top = kernel_stack_top,
+            .ticks_allocated = quantum,
+            .ticks_remaining = quantum,
+            .allocator = Context.ctx.allocator,
+            .sbrk = 0,
+            .brk = 0,
+            .start_time_ms = Timer.get_ticks(),
+            .open_files = .{null} ** max_open_files,
+        };
+    }
+
     pub fn getFile(self: *Process, fd: u32) ?*File {
         if (fd >= max_open_files) return null;
-        return self.file_descriptors[fd];
+        return self.open_files[fd];
     }
 
     pub fn addFile(self: *Process, file: *File) ?u32 {
         for (first_free_fd..max_open_files) |fd| {
-            if (self.file_descriptors[fd] == null) {
-                self.file_descriptors[fd] = file;
+            if (self.open_files[fd] == null) {
+                self.open_files[fd] = file;
                 return @intCast(fd);
             }
         }
@@ -169,7 +214,7 @@ pub const Process = struct {
 
     pub fn closeFile(self: *Process, fd: u32) !void {
         const file = self.getFile(fd) orelse return error.BadFileDescriptor;
-        self.file_descriptors[fd] = null;
+        self.open_files[fd] = null;
         try file.close(self.allocator);
     }
 
@@ -211,8 +256,8 @@ pub const Process = struct {
         return null;
     }
 
-    pub fn prepareKernelStack(stack_top: u32, entry: *const fn () callconv(.c) noreturn) u32 {
-        var sp: [*]u32 = @ptrFromInt(stack_top);
+    pub fn prepareKernelStack(stack_ptr: u32, entry: *const fn () callconv(.c) noreturn) u32 {
+        var sp: [*]u32 = @ptrFromInt(stack_ptr);
         sp -= 1;
         sp[0] = 0; // fake return address for entry
         sp -= 1;
@@ -234,11 +279,6 @@ pub export fn taskEntry() callconv(.c) noreturn {
         @panic("taskEntry was entered before a process was scheduled!");
     switch_to_user_mode_process(executing_process.entry_point);
     unreachable;
-}
-
-// TODO fix this since process exit should do something
-fn halt() noreturn {
-    while (true) asm volatile ("sti; hlt" ::: .{ .memory = true });
 }
 
 var next_pid: u32 = 1;
@@ -327,13 +367,5 @@ pub fn elf32_parse_file(file_name: []const u8, allocator: std.mem.Allocator) !*P
         try page_directory.addMapping(stack_first_page + @as(u32, @intCast(i)), Constants.virtToPhys(stack_frame) / Constants.frame_size, allocator);
     }
 
-    return try Process.create(
-        header.e_entry,
-        Timer.get_ticks(),
-        exec_file_inode.size,
-        image_end,
-        page_directory,
-        allocator,
-        10
-    );
+    return try Process.create(header.e_entry, Timer.get_ticks(), exec_file_inode.size, image_end, page_directory, allocator, 10);
 }
