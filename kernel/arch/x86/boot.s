@@ -37,6 +37,7 @@ section .boot
 global _start ; Make the symbol accessible to other files
 
 _start:
+    CLI
     MOV ecx, (initial_page_dir - 0xC0000000) ; get the physical address of the pd
     MOV cr3, ecx
 

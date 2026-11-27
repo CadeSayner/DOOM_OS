@@ -55,10 +55,10 @@ pub const TimedWaitList = struct {
 };
 
 pub const WaitQueue = struct {
-    waiters: Queue(max_waiters, Waiter),
+    waiters: Queue(max_waiters, Waiter) = .{},
     pub fn addWaiter(self: *WaitQueue, process: *Process) !void {
         const flags = irq_save();
-        try self.waiters.enqueue(Waiter.init(process));
+        try self.waiters.enqueue(Waiter.init(process, null));
         irq_restore(flags);
     }
 

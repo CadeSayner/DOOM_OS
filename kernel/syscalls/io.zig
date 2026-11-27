@@ -44,6 +44,15 @@ pub fn read(regs: *InterruptRegisters) i32 {
 
 /// write(fd: ebx, buf: ecx, count: edx) -> bytes written | -errno
 pub fn write(regs: *InterruptRegisters) i32 {
+    if (regs.eax == 1) {
+        // hack to see stdout
+        const count = @min(regs.edx, max_transfer);
+        if (count == 0) return 0;
+        const ptr: [*]const u8 = @ptrFromInt(regs.ecx);
+        const buffer = ptr[0..count];
+        std.log.info("{s}", .{buffer });
+        return @intCast(count);
+    }
     const proc = Context.ctx.scheduler.executing_process orelse return -Abi.ESRCH;
     const file = proc.getFile(regs.ebx) orelse return -Abi.EBADF;
     const count = @min(regs.edx, max_transfer);

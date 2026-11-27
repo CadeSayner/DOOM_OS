@@ -55,7 +55,6 @@ pub fn sleep(regs: *InterruptRegisters) i32 {
         irq_restore(flags);
         return -Abi.ESRCH;
     };
-
     Context.ctx.timer.waiters.add(proc, ms) catch return -Abi.ENOMEM;
     Context.ctx.scheduler.schedule();
 

@@ -64,8 +64,10 @@ export fn kmain(magic: u32, multiboot_info: *Grub.MultibootInfo) callconv(.c) vo
     Context.ctx.frame_allocator = FrameAllocator.init(initial_frame);
     Context.ctx.slab_allocator = SlabAllocator.init(&Context.ctx.frame_allocator);
     Context.ctx.allocator = Context.ctx.slab_allocator.allocator();
-    Context.ctx.scheduler.init();
     Context.ctx.timer = Timer.init();
+    Context.ctx.scheduler.init();
+
+    asm volatile ("sti" ::: .{ .memory = true });
 
     run(initrd_module) catch |err| @panic(@errorName(err));
 
@@ -102,12 +104,7 @@ fn startInitialProcess() !void {
         std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
         return err;
     };
-    const hello_process = Process.elf32_parse_file("hello.elf", Context.ctx.allocator) catch |err| {
-        std.log.err("Cannot start {s}: {s}", .{ BuildOptions.program, @errorName(err) });
-        return err;
-    };
     try Context.ctx.scheduler.addProcess(doom_process);
-    try Context.ctx.scheduler.addProcess(hello_process);
     Context.ctx.scheduler.schedule();
 }
 

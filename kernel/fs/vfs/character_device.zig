@@ -6,12 +6,18 @@ const Ps2 = @import("../../drivers/ps2.zig");
 const SequenceBuffer = @import("../../lib/sequence.zig").SequenceBuffer;
 const Context = @import("../../context.zig");
 const OpenFlags = @import("../../syscalls/io.zig").OpenFlags;
+const WaitQueue = @import("../../sched/waiter.zig").WaitQueue;
+
+extern fn irq_save() u32;
+extern fn irq_restore(flags: u32) void;
 
 pub fn CharacterDevice(T: type) type {
     return struct {
         const Self = @This();
         inode: *Inode,
         sequence_buffer: SequenceBuffer(T, 1024) = .{},
+        waiters: WaitQueue = .{},
+
         pub fn init(inode: *Inode) Self {
             return .{ .inode = inode };
         }
@@ -52,7 +58,14 @@ pub fn CharacterDeviceFile(T: type) type {
                     self.seq_no += 1;
                 }
             } else {
-                std.log.err("Trying to read character device in blocking mode", .{});
+                std.log.info("Trying to read in blocking mode!!", .{});
+
+                const flags = irq_save();
+                try self.char.waiters.addWaiter(Context.ctx.scheduler.executing_process orelse return error.Unsupported);
+
+                Context.ctx.scheduler.schedule();
+
+                irq_restore(flags);
                 return error.NotSupported;
             }
             return @sizeOf(T);
